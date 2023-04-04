@@ -42,7 +42,6 @@ class Encoder(nn.Module):
         self,
         dim_in,
         dim_h,
-        dim_z,
         dim_h_mult=(1, 2, 4, 8),
         res_block_depth=3,
         attn_depth=1,
@@ -83,9 +82,6 @@ class Encoder(nn.Module):
         self.mid_attn = TransformerBlock(dim_mid, 1, attn_heads, attn_dim_head)
         self.mid_block2 = ResnetBlock(dim_mid, dim_mid)
 
-        # End
-        self.out_conv = nn.Conv1d(dim_mid, dim_z, 1)
-
     def forward(self, x):
         x = self.init_conv(x)
 
@@ -101,8 +97,7 @@ class Encoder(nn.Module):
         x = self.mid_attn(x)
         x = self.mid_block2(x)
 
-        # End
-        return self.out_conv(x)
+        return x
 
 
 class Decoder(nn.Module):
@@ -110,7 +105,6 @@ class Decoder(nn.Module):
         self,
         dim_in,
         dim_h,
-        dim_z,
         dim_h_mult=(1, 2, 4, 8),
         res_block_depth=3,
         attn_depth=1,
@@ -126,7 +120,6 @@ class Decoder(nn.Module):
 
         # Middle
         dim_mid = dims_h[0]
-        self.init_conv = nn.Conv1d(dim_z, dim_mid, 1)
         self.mid_block1 = ResnetBlock(dim_mid, dim_mid)
         self.mid_attn = TransformerBlock(dim_mid, 1, attn_heads, attn_dim_head)
         self.mid_block2 = ResnetBlock(dim_mid, dim_mid)
@@ -153,11 +146,10 @@ class Decoder(nn.Module):
             )
 
         # End
-        self.out_conv = nn.Conv1d(dim_h, dim_in, 7, padding=3)
+        self.end_conv = nn.Conv1d(dim_h, dim_in, 7, padding=3)
 
     def forward(self, x):
         # Middle
-        x = self.init_conv(x)
         x = self.mid_block1(x)
         x = self.mid_attn(x)
         x = self.mid_block2(x)
@@ -170,7 +162,7 @@ class Decoder(nn.Module):
             x = upsample(x)
 
         # End
-        x = self.out_conv(x)
+        x = self.end_conv(x)
         return torch.tanh(x)
 
 
@@ -179,7 +171,6 @@ class VQVAE(nn.Module):
         self,
         dim_in,
         dim_h,
-        dim_z,
         n_emb,
         dim_emb,
         dim_h_mult=(1, 2, 4, 8),
@@ -194,7 +185,6 @@ class VQVAE(nn.Module):
         self.encoder = Encoder(
             dim_in,
             dim_h,
-            dim_z,
             dim_h_mult=dim_h_mult,
             res_block_depth=res_block_depth,
             attn_depth=attn_depth,
@@ -204,7 +194,6 @@ class VQVAE(nn.Module):
         self.decoder = Decoder(
             dim_in,
             dim_h,
-            dim_z,
             dim_h_mult=dim_h_mult,
             res_block_depth=res_block_depth,
             attn_depth=attn_depth,
@@ -212,18 +201,13 @@ class VQVAE(nn.Module):
             attn_dim_head=attn_dim_head,
         )
         self.vq = VectorQuantize(
-            dim=dim_emb,
+            dim=dim_h * dim_h_mult[-1],
+            codebook_dim=dim_emb,
             codebook_size=n_emb,
             commitment_weight=commitment_weight,
             kmeans_init=True,
             use_cosine_sim=True,
             channel_last=False,
-        )
-        self.quant_conv = (
-            nn.Conv1d(dim_z, dim_emb, 1) if dim_z != dim_emb else nn.Identity()
-        )
-        self.post_quant_conv = (
-            nn.Conv1d(dim_emb, dim_z, 1) if dim_z != dim_emb else nn.Identity()
         )
 
         # Discriminator
@@ -240,11 +224,9 @@ class VQVAE(nn.Module):
 
     def encode(self, x):
         x = self.encoder(x)
-        x = self.quant_conv(x)
         return self.vq(x)
 
     def decode(self, x):
-        x = self.post_quant_conv(x)
         return self.decoder(x)
 
     def decode_from_ids(self, ids):
