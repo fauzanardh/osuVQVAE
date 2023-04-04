@@ -9,7 +9,7 @@ class Discriminator(nn.Module):
             [
                 nn.Sequential(
                     nn.Conv1d(in_dim, h_dims[0], 7, padding=3),
-                    nn.SiLU(),
+                    nn.LeakyReLU(0.1),
                 ),
             ]
         )
@@ -18,14 +18,14 @@ class Discriminator(nn.Module):
             self.layers.append(
                 nn.Sequential(
                     nn.Conv1d(_in_dim, _out_dim, 4, stride=2, padding=1),
-                    nn.SiLU(),
+                    nn.LeakyReLU(0.1),
                 )
             )
 
         dim = h_dims[-1]
         self.to_logits = nn.Sequential(
             nn.Conv1d(dim, dim, 1),
-            nn.SiLU(),
+            nn.LeakyReLU(0.1),
             nn.Conv1d(dim, 1, 4),
         )
 
