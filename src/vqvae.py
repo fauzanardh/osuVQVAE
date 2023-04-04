@@ -11,6 +11,10 @@ from modules.discriminator import Discriminator
 from modules.transformer import TransformerBlock
 
 
+def log(t, eps=1e-4):
+    return torch.log(t + eps)
+
+
 def gradient_penalty(sig, output, weight=10):
     gradients = torch.autograd.grad(
         outputs=output,
@@ -25,12 +29,12 @@ def gradient_penalty(sig, output, weight=10):
     return weight * ((gradients.norm(2, dim=-1) - 1) ** 2).mean()
 
 
-def wgan_discriminator_loss(fake, real):
-    return -torch.mean(real) + torch.mean(fake)
+def bce_discriminator_loss(fake, real):
+    return (-log(1 - torch.sigmoid(fake)) - log(torch.sigmoid(real))).mean()
 
 
-def wgan_generator_loss(fake):
-    return -torch.mean(fake)
+def bce_generator_loss(fake):
+    return -log(torch.sigmoid(fake)).mean()
 
 
 class Encoder(nn.Module):
@@ -268,7 +272,7 @@ class VQVAE(nn.Module):
             sig.requires_grad_()
 
             fmap_disc_logits, sig_disc_logits = map(self.discriminator, (fmap, sig))
-            loss = wgan_discriminator_loss(fmap_disc_logits, sig_disc_logits)
+            loss = bce_discriminator_loss(fmap_disc_logits, sig_disc_logits)
 
             if add_gradient_penalty:
                 loss += gradient_penalty(sig, sig_disc_logits)
@@ -279,7 +283,7 @@ class VQVAE(nn.Module):
                 return loss
 
         recon_loss = F.mse_loss(fmap, sig)
-        gen_loss = wgan_generator_loss(self.discriminator(fmap))
+        gen_loss = bce_generator_loss(self.discriminator(fmap))
 
         loss = recon_loss + gen_loss + commit_loss
         if return_recons:
