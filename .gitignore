@@ -160,4 +160,5 @@ cython_debug/
 #.idea/
 
 *.ipynb
-.python_version
+.*
+!.gitignore
