@@ -146,7 +146,7 @@ class Decoder(nn.Module):
             )
 
         # End
-        self.end_conv = nn.Conv1d(dim_h, dim_in, 7, padding=3)
+        self.end_conv = nn.Conv1d(dim_h, dim_in, 1)
 
     def forward(self, x):
         # Middle
