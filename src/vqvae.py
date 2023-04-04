@@ -84,7 +84,6 @@ class Encoder(nn.Module):
         self.mid_block2 = ResnetBlock(dim_mid, dim_mid)
 
         # End
-        self.norm = nn.LayerNorm(dim_mid)
         self.out_conv = nn.Conv1d(dim_mid, dim_z, 1)
 
     def forward(self, x):
