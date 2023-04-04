@@ -171,7 +171,8 @@ class Decoder(nn.Module):
             x = upsample(x)
 
         # End
-        return self.out_conv(x)
+        x = self.out_conv(x)
+        return torch.tanh(x)
 
 
 class VQVAE(nn.Module):
