@@ -33,6 +33,10 @@ class Attention(nn.Module):
             lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), (q, k, v)
         )
 
+        # Convert q, k, v to fp16
+        device = q.device
+        q, k, v = map(lambda t: t.to(torch.float16), (q, k, v))
+
         with torch.backends.cuda.sdp_kernel(
             enable_flash=True,
             enable_math=False,
@@ -45,6 +49,8 @@ class Attention(nn.Module):
                 dropout_p=self.dropout,
             )
 
+        # Convert back to fp32
+        out = out.to(device)
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
 
@@ -84,6 +90,10 @@ class CrossAttention(nn.Module):
             lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), (q, k, v)
         )
 
+        # Convert q, k, v to fp16
+        device = q.device
+        q, k, v = map(lambda t: t.to(torch.float16), (q, k, v))
+
         with torch.backends.cuda.sdp_kernel(
             enable_flash=True,
             enable_math=False,
@@ -96,5 +106,7 @@ class CrossAttention(nn.Module):
                 dropout_p=self.dropout,
             )
 
+        # Convert back to fp32
+        out = out.to(device)
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
