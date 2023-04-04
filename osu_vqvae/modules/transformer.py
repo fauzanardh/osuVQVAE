@@ -1,7 +1,7 @@
 from torch import nn
 from einops import rearrange
 
-from modules.attention import Attention
+from osu_vqvae.modules.attention import Attention
 
 
 def FeedForward(dim, mult=2):

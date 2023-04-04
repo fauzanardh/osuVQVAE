@@ -5,10 +5,10 @@ from torch.nn import functional as F
 from einops import rearrange
 from vector_quantize_pytorch import VectorQuantize
 
-from modules.residual import ResnetBlock
-from modules.scaler import Downsample, Upsample
-from modules.discriminator import Discriminator
-from modules.transformer import TransformerBlock
+from osu_vqvae.modules.residual import ResnetBlock
+from osu_vqvae.modules.scaler import Downsample, Upsample
+from osu_vqvae.modules.discriminator import Discriminator
+from osu_vqvae.modules.transformer import TransformerBlock
 
 
 def log(t, eps=1e-4):
