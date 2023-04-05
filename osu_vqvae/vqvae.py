@@ -11,7 +11,7 @@ from osu_vqvae.modules.discriminator import Discriminator
 from osu_vqvae.modules.transformer import TransformerBlock
 
 
-def log(t, eps=1e-4):
+def log(t, eps=1e-10):
     return torch.log(t + eps)
 
 
