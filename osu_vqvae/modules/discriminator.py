@@ -26,7 +26,7 @@ class Discriminator(nn.Module):
         self.to_logits = nn.Sequential(
             nn.Conv1d(dim, dim, 1),
             nn.LeakyReLU(0.1),
-            nn.Conv1d(dim, 1, 1),
+            nn.Conv1d(dim, 1, 4),
         )
 
     def forward(self, x):
