@@ -177,6 +177,7 @@ class VQVAE(nn.Module):
         attn_heads=8,
         attn_dim_head=64,
         commitment_weight=0.25,
+        use_discriminator=False,
         discriminator_layers=4,
     ):
         super().__init__()
@@ -209,12 +210,13 @@ class VQVAE(nn.Module):
         )
 
         # Discriminator
-        layer_mults = list(map(lambda x: 2**x, range(discriminator_layers)))
-        layer_dims = [dim_h * mult for mult in layer_mults]
-        self.discriminator = Discriminator(
-            dim_in,
-            layer_dims,
-        )
+        if use_discriminator:
+            layer_mults = list(map(lambda x: 2**x, range(discriminator_layers)))
+            layer_dims = [dim_h * mult for mult in layer_mults]
+            self.discriminator = Discriminator(
+                dim_in,
+                layer_dims,
+            )
 
     @property
     def codebook(self):
@@ -247,7 +249,8 @@ class VQVAE(nn.Module):
         if not (return_loss or return_disc_loss):
             return fmap
 
-        if return_disc_loss:
+        # Discriminator
+        if (return_disc_loss and hasattr(self, "discriminator")):
             fmap.detach_()
             sig.requires_grad_()
 
@@ -263,7 +266,11 @@ class VQVAE(nn.Module):
                 return loss
 
         recon_loss = F.mse_loss(fmap, sig)
-        gen_loss = bce_generator_loss(self.discriminator(fmap))
+
+        # Generator
+        gen_loss = 0
+        if hasattr(self, "discriminator"):
+            gen_loss = bce_generator_loss(self.discriminator(fmap))
 
         loss = recon_loss + gen_loss + commit_loss
         if return_recons:
