@@ -37,7 +37,7 @@ def bce_generator_loss(fake):
     return -log(torch.sigmoid(fake)).mean()
 
 
-class Encoder(nn.Module):
+class EncoderAttn(nn.Module):
     def __init__(
         self,
         dim_in,
@@ -100,7 +100,100 @@ class Encoder(nn.Module):
         return x
 
 
+class Encoder(nn.Module):
+    def __init__(
+        self,
+        dim_in,
+        dim_h,
+        dim_h_mult=(1, 2, 4, 8),
+        res_block_depth=3,
+        **kwargs,
+    ):
+        super().__init__()
+        self.init_conv = nn.Conv1d(dim_in, dim_h, 7, padding=3)
+
+        dims_h = [dim_h * mult for mult in dim_h_mult]
+        in_out = list(zip(dims_h[:-1], dims_h[1:]))
+        num_layers = len(in_out)
+
+        # Down
+        self.downs = nn.ModuleList([])
+        for ind in range(num_layers):
+            layer_dim_in, layer_dim_out = in_out[ind]
+            self.downs.append(
+                nn.ModuleList(
+                    [
+                        Downsample(layer_dim_in, layer_dim_out),
+                        nn.ModuleList(
+                            [
+                                ResnetBlock(layer_dim_out, layer_dim_out)
+                                for _ in range(res_block_depth)
+                            ]
+                        ),
+                    ]
+                )
+            )
+
+    def forward(self, x):
+        x = self.init_conv(x)
+
+        # Down
+        for downsample, resnet_blocks in self.downs:
+            x = downsample(x)
+            for resnet_block in resnet_blocks:
+                x = resnet_block(x)
+
+        return x
+
+
 class Decoder(nn.Module):
+    def __init__(
+        self,
+        dim_in,
+        dim_h,
+        dim_h_mult=(1, 2, 4, 8),
+        res_block_depth=3,
+        **kwargs,
+    ):
+        super().__init__()
+
+        dim_h_mult = tuple(reversed(dim_h_mult))
+        dims_h = [dim_h * mult for mult in dim_h_mult]
+        in_out = list(zip(dims_h[:-1], dims_h[1:]))
+        num_layers = len(in_out)
+
+        # Up
+        self.ups = nn.ModuleList([])
+        for ind in range(num_layers):
+            layer_dim_in, layer_dim_out = in_out[ind]
+            self.ups.append(
+                nn.ModuleList(
+                    [
+                        Upsample(layer_dim_in, layer_dim_out),
+                        nn.ModuleList(
+                            [
+                                ResnetBlock(layer_dim_out, layer_dim_out)
+                                for _ in range(res_block_depth)
+                            ]
+                        ),
+                    ]
+                )
+            )
+
+        # End
+        self.end_conv = nn.Conv1d(dim_h, dim_in, 1)
+
+    def forward(self, x):
+        # Up
+        for upsample, resnet_blocks in self.ups:
+            x = upsample(x)
+            for resnet_block in resnet_blocks:
+                x = resnet_block(x)
+
+        return torch.tanh(self.end_conv(x))
+
+
+class DecoderAttn(nn.Module):
     def __init__(
         self,
         dim_in,
@@ -173,6 +266,7 @@ class VQVAE(nn.Module):
         dim_emb,
         dim_h_mult=(1, 2, 4, 8),
         res_block_depth=3,
+        use_attn=False,
         attn_depth=1,
         attn_heads=8,
         attn_dim_head=64,
@@ -181,7 +275,8 @@ class VQVAE(nn.Module):
         discriminator_layers=4,
     ):
         super().__init__()
-        self.encoder = Encoder(
+        encoder_class = EncoderAttn if use_attn else Encoder
+        self.encoder = encoder_class(
             dim_in,
             dim_h,
             dim_h_mult=dim_h_mult,
@@ -190,7 +285,8 @@ class VQVAE(nn.Module):
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
         )
-        self.decoder = Decoder(
+        decoder_class = DecoderAttn if use_attn else Decoder
+        self.decoder = decoder_class(
             dim_in,
             dim_h,
             dim_h_mult=dim_h_mult,
@@ -250,7 +346,7 @@ class VQVAE(nn.Module):
             return fmap
 
         # Discriminator
-        if (return_disc_loss and hasattr(self, "discriminator")):
+        if return_disc_loss and hasattr(self, "discriminator"):
             fmap.detach_()
             sig.requires_grad_()
 
