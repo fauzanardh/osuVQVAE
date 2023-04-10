@@ -30,7 +30,7 @@ def gradient_penalty(sig, output, weight=10):
 
 
 def bce_discriminator_loss(fake, real):
-    return (log(torch.sigmoid(real)) + log(1 - torch.sigmoid(fake))).mean()
+    return -(log(torch.sigmoid(real)) + log(1 - torch.sigmoid(fake))).mean()
 
 
 def bce_generator_loss(fake):
