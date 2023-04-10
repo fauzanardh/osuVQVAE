@@ -266,7 +266,8 @@ class VQVAE(nn.Module):
         dim_emb,
         dim_h_mult=(1, 2, 4, 8),
         res_block_depth=3,
-        use_attn=False,
+        enc_use_attn=False,
+        dec_use_attn=False,
         attn_depth=1,
         attn_heads=8,
         attn_dim_head=64,
@@ -275,7 +276,7 @@ class VQVAE(nn.Module):
         discriminator_layers=4,
     ):
         super().__init__()
-        encoder_class = EncoderAttn if use_attn else Encoder
+        encoder_class = EncoderAttn if enc_use_attn else Encoder
         self.encoder = encoder_class(
             dim_in,
             dim_h,
@@ -285,7 +286,7 @@ class VQVAE(nn.Module):
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
         )
-        decoder_class = DecoderAttn if use_attn else Decoder
+        decoder_class = DecoderAttn if dec_use_attn else Decoder
         self.decoder = decoder_class(
             dim_in,
             dim_h,
