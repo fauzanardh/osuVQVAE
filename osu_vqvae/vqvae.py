@@ -363,7 +363,7 @@ class VQVAE(nn.Module):
             loss = hinge_discriminator_loss(fmap_disc_logits, sig_disc_logits)
 
             if add_gradient_penalty:
-                loss += gradient_penalty(sig, fmap)
+                loss += gradient_penalty(sig, sig_disc_logits)
 
             if return_recons:
                 return loss, fmap
