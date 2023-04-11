@@ -70,16 +70,16 @@ class EncoderAttn(nn.Module):
             self.downs.append(
                 nn.ModuleList(
                     [
+                        Downsample(layer_dim_in, layer_dim_out),
                         nn.ModuleList(
                             [
-                                ResnetBlock(layer_dim_in, layer_dim_in)
+                                ResnetBlock(layer_dim_out, layer_dim_out)
                                 for _ in range(res_block_depth)
                             ]
                         ),
                         TransformerBlock(
-                            layer_dim_in, attn_depth, attn_heads, attn_dim_head
+                            layer_dim_out, attn_depth, attn_heads, attn_dim_head
                         ),
-                        Downsample(layer_dim_in, layer_dim_out),
                     ]
                 )
             )
@@ -94,11 +94,11 @@ class EncoderAttn(nn.Module):
         x = self.init_conv(x)
 
         # Down
-        for resnet_blocks, attn_block, downsample in self.downs:
+        for downsample, resnet_blocks, attn_block in self.downs:
+            x = downsample(x)
             for resnet_block in resnet_blocks:
                 x = resnet_block(x)
             x = attn_block(x)
-            x = downsample(x)
 
         # Middle
         x = self.mid_block1(x)
@@ -154,6 +154,70 @@ class Encoder(nn.Module):
         return x
 
 
+class DecoderAttn(nn.Module):
+    def __init__(
+        self,
+        dim_in,
+        dim_h,
+        dim_h_mult=(1, 2, 4, 8),
+        res_block_depth=3,
+        attn_depth=1,
+        attn_heads=8,
+        attn_dim_head=64,
+    ):
+        super().__init__()
+
+        dim_h_mult = tuple(reversed(dim_h_mult))
+        dims_h = [dim_h * mult for mult in dim_h_mult]
+        in_out = list(zip(dims_h[:-1], dims_h[1:]))
+        num_layers = len(in_out)
+
+        # Middle
+        dim_mid = dims_h[0]
+        self.mid_block1 = ResnetBlock(dim_mid, dim_mid)
+        self.mid_attn = TransformerBlock(dim_mid, 1, attn_heads, attn_dim_head)
+        self.mid_block2 = ResnetBlock(dim_mid, dim_mid)
+
+        # Up
+        self.ups = nn.ModuleList([])
+        for ind in range(num_layers):
+            layer_dim_in, layer_dim_out = in_out[ind]
+            self.ups.append(
+                nn.ModuleList(
+                    [
+                        Upsample(layer_dim_in, layer_dim_out),
+                        nn.ModuleList(
+                            [
+                                ResnetBlock(layer_dim_out, layer_dim_out)
+                                for _ in range(res_block_depth)
+                            ]
+                        ),
+                        TransformerBlock(
+                            layer_dim_out, attn_depth, attn_heads, attn_dim_head
+                        ),
+                    ]
+                )
+            )
+
+        # End
+        self.end_conv = nn.Conv1d(dim_h, dim_in, 1)
+
+    def forward(self, x):
+        # Middle
+        x = self.mid_block1(x)
+        x = self.mid_attn(x)
+        x = self.mid_block2(x)
+
+        # Up
+        for upsample, resnet_blocks, attn_block in self.ups:
+            x = upsample(x)
+            for resnet_block in resnet_blocks:
+                x = resnet_block(x)
+            x = attn_block(x)
+
+        return torch.tanh(self.end_conv(x))
+
+
 class Decoder(nn.Module):
     def __init__(
         self,
@@ -197,70 +261,6 @@ class Decoder(nn.Module):
             x = upsample(x)
             for resnet_block in resnet_blocks:
                 x = resnet_block(x)
-
-        return torch.tanh(self.end_conv(x))
-
-
-class DecoderAttn(nn.Module):
-    def __init__(
-        self,
-        dim_in,
-        dim_h,
-        dim_h_mult=(1, 2, 4, 8),
-        res_block_depth=3,
-        attn_depth=1,
-        attn_heads=8,
-        attn_dim_head=64,
-    ):
-        super().__init__()
-
-        dim_h_mult = tuple(reversed(dim_h_mult))
-        dims_h = [dim_h * mult for mult in dim_h_mult]
-        in_out = list(zip(dims_h[:-1], dims_h[1:]))
-        num_layers = len(in_out)
-
-        # Middle
-        dim_mid = dims_h[0]
-        self.mid_block1 = ResnetBlock(dim_mid, dim_mid)
-        self.mid_attn = TransformerBlock(dim_mid, 1, attn_heads, attn_dim_head)
-        self.mid_block2 = ResnetBlock(dim_mid, dim_mid)
-
-        # Up
-        self.ups = nn.ModuleList([])
-        for ind in range(num_layers):
-            layer_dim_in, layer_dim_out = in_out[ind]
-            self.ups.append(
-                nn.ModuleList(
-                    [
-                        nn.ModuleList(
-                            [
-                                ResnetBlock(layer_dim_in, layer_dim_in)
-                                for _ in range(res_block_depth)
-                            ]
-                        ),
-                        TransformerBlock(
-                            layer_dim_in, attn_depth, attn_heads, attn_dim_head
-                        ),
-                        Upsample(layer_dim_in, layer_dim_out),
-                    ]
-                )
-            )
-
-        # End
-        self.end_conv = nn.Conv1d(dim_h, dim_in, 1)
-
-    def forward(self, x):
-        # Middle
-        x = self.mid_block1(x)
-        x = self.mid_attn(x)
-        x = self.mid_block2(x)
-
-        # Up
-        for resnet_blocks, attn_block, upsample in self.ups:
-            for resnet_block in resnet_blocks:
-                x = resnet_block(x)
-            x = attn_block(x)
-            x = upsample(x)
 
         return torch.tanh(self.end_conv(x))
 
