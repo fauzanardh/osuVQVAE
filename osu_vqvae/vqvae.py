@@ -5,7 +5,7 @@ from torch.nn import functional as F
 from einops import rearrange
 from vector_quantize_pytorch import VectorQuantize
 
-from osu_vqvae.modules.residual import ResnetBlock
+from osu_vqvae.modules.residual import ResnetBlock, GLUResnetBlock
 from osu_vqvae.modules.scaler import Downsample, Upsample
 from osu_vqvae.modules.discriminator import Discriminator
 from osu_vqvae.modules.transformer import TransformerBlock
@@ -73,7 +73,7 @@ class EncoderAttn(nn.Module):
                         Downsample(layer_dim_in, layer_dim_out),
                         nn.ModuleList(
                             [
-                                ResnetBlock(layer_dim_out, layer_dim_out)
+                                ResnetBlock(layer_dim_out)
                                 for _ in range(res_block_depth)
                             ]
                         ),
@@ -86,9 +86,9 @@ class EncoderAttn(nn.Module):
 
         # Middle
         dim_mid = dims_h[-1]
-        self.mid_block1 = ResnetBlock(dim_mid, dim_mid)
+        self.mid_block1 = ResnetBlock(dim_mid)
         self.mid_attn = TransformerBlock(dim_mid, 1, attn_heads, attn_dim_head)
-        self.mid_block2 = ResnetBlock(dim_mid, dim_mid)
+        self.mid_block2 = ResnetBlock(dim_mid)
 
     def forward(self, x):
         x = self.init_conv(x)
@@ -134,7 +134,7 @@ class Encoder(nn.Module):
                         Downsample(layer_dim_in, layer_dim_out),
                         nn.ModuleList(
                             [
-                                ResnetBlock(layer_dim_out, layer_dim_out)
+                                ResnetBlock(layer_dim_out)
                                 for _ in range(res_block_depth)
                             ]
                         ),
@@ -174,9 +174,9 @@ class DecoderAttn(nn.Module):
 
         # Middle
         dim_mid = dims_h[0]
-        self.mid_block1 = ResnetBlock(dim_mid, dim_mid)
+        self.mid_block1 = ResnetBlock(dim_mid)
         self.mid_attn = TransformerBlock(dim_mid, 1, attn_heads, attn_dim_head)
-        self.mid_block2 = ResnetBlock(dim_mid, dim_mid)
+        self.mid_block2 = ResnetBlock(dim_mid)
 
         # Up
         self.ups = nn.ModuleList([])
@@ -188,7 +188,7 @@ class DecoderAttn(nn.Module):
                         Upsample(layer_dim_in, layer_dim_out),
                         nn.ModuleList(
                             [
-                                ResnetBlock(layer_dim_out, layer_dim_out)
+                                GLUResnetBlock(layer_dim_out)
                                 for _ in range(res_block_depth)
                             ]
                         ),
@@ -244,7 +244,7 @@ class Decoder(nn.Module):
                         Upsample(layer_dim_in, layer_dim_out),
                         nn.ModuleList(
                             [
-                                ResnetBlock(layer_dim_out, layer_dim_out)
+                                GLUResnetBlock(layer_dim_out)
                                 for _ in range(res_block_depth)
                             ]
                         ),
@@ -262,7 +262,7 @@ class Decoder(nn.Module):
             for resnet_block in resnet_blocks:
                 x = resnet_block(x)
 
-        return torch.tanh(self.end_conv(x))
+        return self.end_conv(x)
 
 
 class VQVAE(nn.Module):
