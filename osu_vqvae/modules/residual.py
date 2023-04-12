@@ -6,11 +6,10 @@ class Block(nn.Sequential):
         self,
         dim,
         dim_out,
-        groups=8,
         norm=True,
     ):
         super().__init__(
-            nn.GroupNorm(groups, dim) if norm else nn.Identity(),
+            nn.GroupNorm(1, dim) if norm else nn.Identity(),
             nn.SiLU(),
             nn.Conv1d(dim, dim_out, 7, padding=3),
         )
@@ -21,12 +20,11 @@ class ResnetBlock(nn.Module):
         self,
         dim,
         dim_out,
-        groups=8,
         norm=True,
     ):
         super().__init__()
-        self.block1 = Block(dim, dim_out, groups, norm)
-        self.block2 = Block(dim_out, dim_out, groups, norm)
+        self.block1 = Block(dim, dim_out, norm)
+        self.block2 = Block(dim_out, dim_out, norm)
         self.res_conv = nn.Conv1d(dim, dim_out, 7, padding=3) if dim != dim_out else nn.Identity()
 
     def forward(self, x):
