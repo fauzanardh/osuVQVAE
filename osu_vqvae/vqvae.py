@@ -262,7 +262,7 @@ class Decoder(nn.Module):
             for resnet_block in resnet_blocks:
                 x = resnet_block(x)
 
-        return self.end_conv(x)
+        return torch.tanh(self.end_conv(x))
 
 
 class VQVAE(nn.Module):
