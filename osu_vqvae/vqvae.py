@@ -158,8 +158,10 @@ class DecoderAttn(nn.Module):
         attn_depth=1,
         attn_heads=8,
         attn_dim_head=64,
+        use_tanh=False,
     ):
         super().__init__()
+        self.use_tanh = use_tanh
 
         dim_h_mult = tuple(reversed(dim_h_mult))
         dims_h = [dim_h * mult for mult in dim_h_mult]
@@ -219,9 +221,11 @@ class Decoder(nn.Module):
         dim_h,
         dim_h_mult=(1, 2, 4, 8),
         res_block_depth=3,
+        use_tanh=False,
         **kwargs,
     ):
         super().__init__()
+        self.use_tanh = use_tanh
 
         dim_h_mult = tuple(reversed(dim_h_mult))
         dims_h = [dim_h * mult for mult in dim_h_mult]
@@ -280,7 +284,6 @@ class VQVAE(nn.Module):
         use_hinge_loss=False,
     ):
         super().__init__()
-        self.use_tanh = use_tanh
 
         encoder_class = EncoderAttn if enc_use_attn else Encoder
         self.encoder = encoder_class(
