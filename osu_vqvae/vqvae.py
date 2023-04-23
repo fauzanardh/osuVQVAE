@@ -72,10 +72,7 @@ class EncoderAttn(nn.Module):
                     [
                         Downsample(layer_dim_in, layer_dim_out),
                         nn.ModuleList(
-                            [
-                                ResnetBlock(layer_dim_out)
-                                for _ in range(res_block_depth)
-                            ]
+                            [ResnetBlock(layer_dim_out) for _ in range(res_block_depth)]
                         ),
                         TransformerBlock(
                             layer_dim_out, attn_depth, attn_heads, attn_dim_head
@@ -133,10 +130,7 @@ class Encoder(nn.Module):
                     [
                         Downsample(layer_dim_in, layer_dim_out),
                         nn.ModuleList(
-                            [
-                                ResnetBlock(layer_dim_out)
-                                for _ in range(res_block_depth)
-                            ]
+                            [ResnetBlock(layer_dim_out) for _ in range(res_block_depth)]
                         ),
                     ]
                 )
@@ -215,7 +209,7 @@ class DecoderAttn(nn.Module):
                 x = resnet_block(x)
             x = attn_block(x)
 
-        return torch.tanh(self.end_conv(x))
+        return torch.tanh(self.end_conv(x)) if self.use_tanh else self.end_conv(x)
 
 
 class Decoder(nn.Module):
@@ -262,7 +256,7 @@ class Decoder(nn.Module):
             for resnet_block in resnet_blocks:
                 x = resnet_block(x)
 
-        return torch.tanh(self.end_conv(x))
+        return torch.tanh(self.end_conv(x)) if self.use_tanh else self.end_conv(x)
 
 
 class VQVAE(nn.Module):
@@ -282,9 +276,12 @@ class VQVAE(nn.Module):
         commitment_weight=0.25,
         use_discriminator=False,
         discriminator_layers=4,
+        use_tanh=False,
         use_hinge_loss=False,
     ):
         super().__init__()
+        self.use_tanh = use_tanh
+
         encoder_class = EncoderAttn if enc_use_attn else Encoder
         self.encoder = encoder_class(
             dim_in,
