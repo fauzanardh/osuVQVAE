@@ -357,6 +357,9 @@ class VQVAE(nn.Module):
         return_recons=True,
         add_gradient_penalty=False,
     ):
+        # limit sig to [-1, 1] range
+        sig = torch.clamp(sig, -1, 1)
+
         fmap, _, commit_loss = self.encode(sig)
         fmap = self.decode(fmap)
 
