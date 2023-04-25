@@ -294,7 +294,6 @@ class VQVAE(nn.Module):
             attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
-            use_tanh=use_tanh,
         )
         decoder_class = DecoderAttn if dec_use_attn else Decoder
         self.decoder = decoder_class(
