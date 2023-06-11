@@ -223,6 +223,9 @@ class VQVAE(nn.Module):
             commitment_weight=0.0,
             kmeans_init=True,
             kmeans_iters=10,
+            stochastic_sample_codes=True,
+            sample_codebook_temp=0.1,
+            shared_codebook=True,
         )
 
         # Discriminator
@@ -243,7 +246,7 @@ class VQVAE(nn.Module):
 
     @property
     def codebook(self):
-        return self.vq.codebook
+        return self.vq.codebooks
 
     def encode(self, x):
         x = self.encoder(x)
