@@ -179,7 +179,6 @@ class VQVAE(nn.Module):
         dim_in,
         dim_h,
         n_emb,
-        dim_emb,
         dim_h_mult=(1, 2, 4, 8),
         attn_depth=(2, 2, 2, 4),
         attn_heads=8,
@@ -188,7 +187,7 @@ class VQVAE(nn.Module):
         vq_decay=0.9,
         rvq_quantize_dropout=True,
         use_discriminator=False,
-        discriminator_layers=4,
+        discriminator_layers=3,
         use_tanh=False,
         use_hinge_loss=False,
     ):
