@@ -216,7 +216,6 @@ class VQVAE(nn.Module):
         self.vq = ResidualVQ(
             dim=dim_h * dim_h_mult[-1],
             num_quantizers=num_codebooks,
-            codebook_dim=dim_emb,
             codebook_size=n_emb,
             decay=vq_decay,
             quantize_dropout=num_codebooks > 1 and rvq_quantize_dropout,
