@@ -1,8 +1,11 @@
+from typing import Tuple
+
+import torch
 from torch import nn
 
 
 class Discriminator(nn.Module):
-    def __init__(self, in_dim, h_dims):
+    def __init__(self: "Discriminator", in_dim: int, h_dims: Tuple[int]) -> None:
         super().__init__()
         dim_pairs = list(zip(h_dims[:-1], h_dims[1:]))
         self.layers = nn.ModuleList(
@@ -11,7 +14,7 @@ class Discriminator(nn.Module):
                     nn.Conv1d(in_dim, h_dims[0], 7, padding=3),
                     nn.LeakyReLU(0.1),
                 ),
-            ]
+            ],
         )
 
         for _in_dim, _out_dim in dim_pairs:
@@ -19,7 +22,7 @@ class Discriminator(nn.Module):
                 nn.Sequential(
                     nn.Conv1d(_in_dim, _out_dim, 4, stride=2, padding=1),
                     nn.LeakyReLU(0.1),
-                )
+                ),
             )
 
         dim = h_dims[-1]
@@ -29,7 +32,7 @@ class Discriminator(nn.Module):
             nn.Conv1d(dim, 1, 4),
         )
 
-    def forward(self, x):
+    def forward(self: "Discriminator", x: torch.Tensor) -> torch.Tensor:
         for layer in self.layers:
             x = layer(x)
 

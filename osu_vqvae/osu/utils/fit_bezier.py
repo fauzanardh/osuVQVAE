@@ -1,43 +1,52 @@
 # https://github.com/volkerp/fitCurves
 
-import numpy as np
+from typing import List
 
 import bezier
+import numpy as np
+import numpy.typing as npt
 
 
-def hodo(p):
+def hodo(p: npt.ArrayLike) -> npt.ArrayLike:
     return p.shape[0] * (p[1:] - p[:-1])
 
 
-def q(p, t):
+def q(p: npt.ArrayLike, t: npt.ArrayLike) -> npt.ArrayLike:
     """evaluates bezier at t"""
     return bezier.Curve.from_nodes(p.T).evaluate_multi(t).T
 
 
-def qprime(p, t):
+def qprime(p: npt.ArrayLike, t: npt.ArrayLike) -> npt.ArrayLike:
     """evaluates bezier first derivative at t"""
     return bezier.Curve.from_nodes(hodo(p).T).evaluate_multi(t).T
 
 
-def qprimeprime(p, t):
+def qprimeprime(p: npt.ArrayLike, t: npt.ArrayLike) -> npt.ArrayLike:
     """evaluates bezier second derivative at t"""
     return bezier.Curve.from_nodes(hodo(hodo(p)).T).evaluate_multi(t).T
 
 
-def normalize(v):
+def normalize(v: npt.ArrayLike) -> npt.ArrayLike:
     magnitude = np.sqrt(np.dot(v, v))
     if magnitude < np.finfo(float).eps:
         return v
     return v / magnitude
 
 
-def compute_error(p, points, u):
+def compute_error(
+    p: npt.ArrayLike, points: npt.ArrayLike, u: npt.ArrayLike
+) -> npt.ArrayLike:
     errs = ((q(p, u) - points) ** 2).sum(-1)
     split_point = errs.argmax()
     return errs[split_point], split_point
 
 
-def fit_bezier(points, max_err, left_tangent=None, right_tangent=None):
+def fit_bezier(
+    points: npt.ArrayLike,
+    max_err: npt.ArrayLike,
+    left_tangent: npt.ArrayLike = None,
+    right_tangent: npt.ArrayLike = None,
+) -> List[npt.ArrayLike]:
     """fit one (or more) Bezier curves to a set of points"""
 
     if len(points) < 2:
@@ -91,26 +100,31 @@ def fit_bezier(points, max_err, left_tangent=None, right_tangent=None):
     ]
 
 
-def generate_bezier(points, u, left_tangent, right_tangent):
+def generate_bezier(
+    points: npt.ArrayLike,
+    u: npt.ArrayLike,
+    left_tangent: npt.ArrayLike,
+    right_tangent: npt.ArrayLike,
+) -> npt.ArrayLike:
     bez_curve = np.array([points[0], points[0], points[-1], points[-1]])
 
     # compute the A's
-    A = (3 * (1 - u) * u * np.array([1 - u, u])).T[..., None] * np.array(
-        [left_tangent, right_tangent]
+    _a = (3 * (1 - u) * u * np.array([1 - u, u])).T[..., None] * np.array(
+        [left_tangent, right_tangent],
     )
 
     # Create the C and X matrices
-    C = np.einsum("lix,ljx->ij", A, A)
-    X = np.einsum("lix,lx->i", A, points - q(bez_curve, u))
+    _c = np.einsum("lix,ljx->ij", _a, _a)
+    _x = np.einsum("lix,lx->i", _a, points - q(bez_curve, u))
 
     # Compute the determinants of C and X
-    det_C0_C1 = C[0][0] * C[1][1] - C[1][0] * C[0][1]
-    det_C0_X = C[0][0] * X[1] - C[1][0] * X[0]
-    det_X_C1 = X[0] * C[1][1] - X[1] * C[0][1]
+    det_c0_c1 = _c[0][0] * _c[1][1] - _c[1][0] * _c[0][1]
+    det_c0_x = _c[0][0] * _x[1] - _c[1][0] * _x[0]
+    det_x_c1 = _x[0] * _c[1][1] - _x[1] * _c[0][1]
 
     # Finally, derive alpha values
-    alpha_l = 0.0 if abs(det_C0_C1) < 1e-5 else det_X_C1 / det_C0_C1
-    alpha_r = 0.0 if abs(det_C0_C1) < 1e-5 else det_C0_X / det_C0_C1
+    alpha_l = 0.0 if abs(det_c0_c1) < 1e-5 else det_x_c1 / det_c0_c1
+    alpha_r = 0.0 if abs(det_c0_c1) < 1e-5 else det_c0_x / det_c0_c1
 
     # If alpha negative, use the Wu/Barsky heuristic (see text)
     # (if alpha is 0, you get coincident control points that lead to
@@ -133,7 +147,11 @@ def generate_bezier(points, u, left_tangent, right_tangent):
     return bez_curve
 
 
-def newton_raphson_root_find(bez, points, u):
+def newton_raphson_root_find(
+    bez: npt.ArrayLike,
+    points: npt.ArrayLike,
+    u: npt.ArrayLike,
+) -> npt.ArrayLike:
     """
     Newton's root finding algorithm calculates f(x)=0 by reiterating
     x_n+1 = x_n - f(x_n)/f'(x_n)

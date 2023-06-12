@@ -1,30 +1,32 @@
 import random
-import numpy as np
+from typing import Dict, Generator
 
+import numpy as np
 import torch
 from torch.utils.data import IterableDataset
 
 
-def load_tensor(map_file):
+def load_tensor(map_file: str) -> torch.Tensor:
     x = torch.tensor(np.load(map_file)["x"]).float()
     # a = torch.tensor(np.load(map_file.parent / "spec.npz")["spec"]).float()
     return x
 
 
 class StreamPerSample(IterableDataset):
-    def __init__(self, **kwargs):
+    def __init__(self: "StreamPerSample", **kwargs: Dict) -> None:
         super().__init__()
 
         self.dataset = kwargs.pop("dataset")
         self.sample_density = kwargs.pop("sample_density", 1.0)
 
         if not (0 < self.sample_density <= 1.0):
-            raise ValueError("sample_density must be in (0, 1]")
+            msg = "sample_density must be in (0, 1]"
+            raise ValueError(msg)
 
-    def sample_stream(self, map_file):
+    def sample_stream(self: "StreamPerSample", map_file: str) -> torch.Tensor:
         raise NotImplementedError
 
-    def __iter__(self):
+    def __iter__(self: "StreamPerSample") -> Generator[torch.Tensor, None, None]:
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is None:
             num_workers = 1
@@ -39,7 +41,8 @@ class StreamPerSample(IterableDataset):
 
         dataset = sorted(self.dataset)
         for i, sample in random.sample(
-            list(enumerate(dataset)), int(len(dataset) * self.sample_density)
+            list(enumerate(dataset)),
+            int(len(dataset) * self.sample_density),
         ):
             if i % num_workers != worker_id:
                 continue
@@ -51,13 +54,16 @@ class StreamPerSample(IterableDataset):
 class FullSequenceDataset(StreamPerSample):
     MAX_LEN = 60000
 
-    def sample_stream(self, map_file):
+    def sample_stream(
+        self: "FullSequenceDataset",
+        map_file: str,
+    ) -> Generator[torch.Tensor, None, None]:
         x = load_tensor(map_file)
         yield x[..., : self.MAX_LEN]
 
 
 class SubsequenceDataset(StreamPerSample):
-    def __init__(self, **kwargs):
+    def __init__(self: "SubsequenceDataset", **kwargs: Dict) -> None:
         self.seq_len = kwargs.pop("seq_len")
         self.subseq_density = kwargs.pop("subseq_density", 2)
         super().__init__(**kwargs)
@@ -76,7 +82,10 @@ class SubsequenceDataset(StreamPerSample):
 
         # self.approx_dataset_size = num_samples * self.subseq_density
 
-    def sample_stream(self, map_file):
+    def sample_stream(
+        self: "SubsequenceDataset",
+        map_file: str,
+    ) -> Generator[torch.Tensor, None, None]:
         x = load_tensor(map_file)
         n = x.shape[-1]
 

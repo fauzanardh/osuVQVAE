@@ -1,16 +1,16 @@
 from typing import List, Tuple
 
-import numpy as np
 import bezier
+import numpy as np
 
-from osu_vqvae.osu.hit_objects import Slider, NDIntArray
+from osu_vqvae.osu.hit_objects import NDIntArray, Slider
 
 
-def approx_eq(a, b):
+def approx_eq(a: int, b: int) -> bool:
     return abs(a - b) < 1e-8
 
 
-def binom_coeffs(n):
+def binom_coeffs(n: int) -> List[float]:
     out = []
     c = 1.0
     for k in range(n + 1):
@@ -21,7 +21,7 @@ def binom_coeffs(n):
 
 class Line(Slider):
     def __init__(
-        self,
+        self: "Line",
         t: int,
         beat_length: float,
         sldier_mult: float,
@@ -30,25 +30,25 @@ class Line(Slider):
         length: float,
         start: NDIntArray,
         end: NDIntArray,
-    ):
+    ) -> None:
         super().__init__(t, beat_length, sldier_mult, new_combo, slides, length)
         self.start = start
 
         vec = end - self.start
         self.end = self.start + vec / np.linalg.norm(vec) * length
 
-    def lerp(self, t: float) -> NDIntArray:
+    def lerp(self: "Line", t: float) -> NDIntArray:
         out = (1 - t) * self.start + t * self.end
         return out.round(0).astype(np.int32)
 
-    def vel(self, t: float) -> NDIntArray:
+    def vel(self: "Line", t: float) -> NDIntArray:
         out = (self.end - self.start) / (self.slide_duration / self.slides)
         return out.round(0).astype(np.int32)
 
 
 class Perfect(Slider):
     def __init__(
-        self,
+        self: "Perfect",
         t: int,
         beat_length: float,
         slider_mult: float,
@@ -59,7 +59,7 @@ class Perfect(Slider):
         radius: float,
         start: float,
         end: float,
-    ):
+    ) -> None:
         super().__init__(t, beat_length, slider_mult, new_combo, slides, length)
         self.center = center
         self.radius = radius
@@ -67,12 +67,12 @@ class Perfect(Slider):
 
         self.end = start + length / radius * np.sign(end - start)
 
-    def lerp(self, t: float) -> NDIntArray:
+    def lerp(self: "Perfect", t: float) -> NDIntArray:
         theta = (1 - t) * self.start + t * self.end
         out = self.center + self.radius * np.array([np.cos(theta), np.sin(theta)])
         return out.round(0).astype(np.int32)
 
-    def vel(self, t: float) -> NDIntArray:
+    def vel(self: "Perfect", t: float) -> NDIntArray:
         theta = (1 - t) * self.start + t * self.end
         out = (
             self.radius
@@ -86,7 +86,7 @@ class Bezier(Slider):
     SEG_LEN = 10
 
     def __init__(
-        self,
+        self: "Bezier",
         t: int,
         beat_length: float,
         slider_mult: float,
@@ -94,7 +94,7 @@ class Bezier(Slider):
         slides: int,
         length: float,
         control_points: List[NDIntArray],
-    ):
+    ) -> None:
         super().__init__(t, beat_length, slider_mult, new_combo, slides, length)
         self.control_points = control_points
 
@@ -127,7 +127,8 @@ class Bezier(Slider):
             bezier_curve = bezier.Curve.from_nodes(nodes)
 
             assert approx_eq(
-                bezier_curve.length, tail_len
+                bezier_curve.length,
+                tail_len,
             ), f"{bezier_curve.length} != {tail_len}"
             curves.append(bezier_curve)
 
@@ -135,7 +136,7 @@ class Bezier(Slider):
         self.cum_t = np.cumsum([c.length for c in curves]) / self.length
         self.cum_t[-1] = 1.0
 
-    def curve_reparameterize(self, t: float) -> Tuple[int, float]:
+    def curve_reparameterize(self: "Bezier", t: float) -> Tuple[int, float]:
         idx = np.searchsorted(self.cum_t, min(1, max(0, t)))
         assert idx < len(self.cum_t), f"{idx} >= {len(self.cum_t)}"
 
@@ -145,11 +146,11 @@ class Bezier(Slider):
         t = (t - range_start) / (range_end - range_start)
         return int(idx), t
 
-    def lerp(self, t: float) -> NDIntArray:
+    def lerp(self: "Bezier", t: float) -> NDIntArray:
         idx, t = self.curve_reparameterize(t)
         return self.path_segments[idx].evaluate(t)[:, 0].round(0).astype(np.int32)
 
-    def vel(self, t: float) -> NDIntArray:
+    def vel(self: "Bezier", t: float) -> NDIntArray:
         idx, t = self.curve_reparameterize(t)
         out = self.path_segments[idx].evaluate_hodograph(t)[:, 0] / (
             self.slide_duration / self.slides
@@ -165,24 +166,31 @@ def from_control_points(
     slides: int,
     length: float,
     control_points: List[NDIntArray],
-):
+) -> Slider:
     assert len(control_points) >= 2, "control points must have at least 2 points"
 
     if len(control_points) == 2:  # L type
-        A, B = control_points
-        return Line(t, beat_length, slider_mult, new_combo, slides, length, A, B)
+        _a, _b = control_points
+        return Line(t, beat_length, slider_mult, new_combo, slides, length, _a, _b)
     if len(control_points) == 3:  # P type
-        A, B, C = control_points
+        _a, _b, _c = control_points
 
-        if (B == C).all():
-            return Line(t, beat_length, slider_mult, new_combo, slides, length, A, C)
+        if (_b == _c).all():
+            return Line(t, beat_length, slider_mult, new_combo, slides, length, _a, _c)
 
-        ABC = np.cross(B - A, C - B)
+        _abc = np.cross(_b - _a, _c - _b)
 
-        if ABC == 0:  # collinear
-            if np.dot(B - A, C - B) > 0:
+        if _abc == 0:  # collinear
+            if np.dot(_b - _a, _c - _b) > 0:
                 return Line(
-                    t, beat_length, slider_mult, new_combo, slides, length, A, C
+                    t,
+                    beat_length,
+                    slider_mult,
+                    new_combo,
+                    slides,
+                    length,
+                    _a,
+                    _c,
                 )
             else:
                 control_points.insert(1, control_points[1])
@@ -196,27 +204,33 @@ def from_control_points(
                     control_points,
                 )
 
-        a = np.linalg.norm(C - B)
-        b = np.linalg.norm(C - A)
-        c = np.linalg.norm(B - A)
+        a = np.linalg.norm(_c - _b)
+        b = np.linalg.norm(_c - _a)
+        c = np.linalg.norm(_b - _a)
         s = (a + b + c) / 2.0
-        R = a * b * c / 4.0 / np.sqrt(s * (s - a) * (s - b) * (s - c))
+        _r = a * b * c / 4.0 / np.sqrt(s * (s - a) * (s - b) * (s - c))
 
-        if R > 320 and np.dot(C - B, B - A) < 0:  # circle too large
+        if _r > 320 and np.dot(_c - _b, _b - _a) < 0:  # circle too large
             return Bezier(
-                t, beat_length, slider_mult, new_combo, slides, length, control_points
+                t,
+                beat_length,
+                slider_mult,
+                new_combo,
+                slides,
+                length,
+                control_points,
             )
 
         b1 = a * a * (b * b + c * c - a * a)
         b2 = b * b * (a * a + c * c - b * b)
         b3 = c * c * (a * a + b * b - c * c)
-        P = np.column_stack((A, B, C)).dot(np.hstack((b1, b2, b3)))
-        P /= b1 + b2 + b3
+        _p = np.column_stack((_a, _b, _c)).dot(np.hstack((b1, b2, b3)))
+        _p /= b1 + b2 + b3
 
-        start_angle = np.arctan2(*(A - P)[[1, 0]])
-        end_angle = np.arctan2(*(C - P)[[1, 0]])
+        start_angle = np.arctan2(*(_a - _p)[[1, 0]])
+        end_angle = np.arctan2(*(_c - _p)[[1, 0]])
 
-        if ABC < 0:  # clockwise
+        if _abc < 0:  # clockwise
             while end_angle > start_angle:
                 end_angle -= 2 * np.pi
         else:  # counter-clockwise
@@ -230,12 +244,18 @@ def from_control_points(
             new_combo,
             slides,
             length,
-            P,
-            R,
+            _p,
+            _r,
             start_angle,
             end_angle,
         )
     else:
         return Bezier(
-            t, beat_length, slider_mult, new_combo, slides, length, control_points
+            t,
+            beat_length,
+            slider_mult,
+            new_combo,
+            slides,
+            length,
+            control_points,
         )

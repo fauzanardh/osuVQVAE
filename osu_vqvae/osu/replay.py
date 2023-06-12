@@ -1,10 +1,10 @@
+import datetime
 import lzma
 import struct
-import datetime
-from pathlib import Path
-from enum import Enum, IntFlag
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from enum import Enum, IntFlag
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -38,12 +38,12 @@ class LifeBarState:
     life: float
 
 
-class _unpacker:
-    def __init__(self, replay_data: bytes):
+class _Unpacker:
+    def __init__(self: "_Unpacker", replay_data: bytes) -> None:
         self.replay_data = replay_data
         self.offset = 0
 
-    def string_length(self) -> int:
+    def string_length(self: "_Unpacker") -> int:
         result = 0
         shift = 0
         while True:
@@ -55,7 +55,7 @@ class _unpacker:
             shift += 7
         return result
 
-    def unpack_string(self) -> Optional[str]:
+    def unpack_string(self: "_Unpacker") -> Optional[str]:
         if self.replay_data[self.offset] == 0x0:
             self.offset += 1
             return None
@@ -63,20 +63,21 @@ class _unpacker:
             self.offset += 1
             length = self.string_length()
             result = self.replay_data[self.offset : self.offset + length].decode(
-                "utf-8"
+                "utf-8",
             )
             self.offset += length
             return result
         else:
-            raise ValueError("Invalid string")
+            msg = "Invalid string"
+            raise ValueError(msg)
 
-    def unpack_once(self, fmt: str):
+    def unpack_once(self: "_Unpacker", fmt: str) -> int:
         specifier = f"<{fmt}"
         unpacked = struct.unpack_from(specifier, self.replay_data, self.offset)
         self.offset += struct.calcsize(specifier)
         return unpacked[0]
 
-    def unpack_timestamp(self) -> datetime.datetime:
+    def unpack_timestamp(self: "_Unpacker") -> datetime.datetime:
         ticks = self.unpack_once("q")
         timestamp = datetime.datetime.min + datetime.timedelta(microseconds=ticks / 10)
         timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
@@ -104,7 +105,9 @@ class _unpacker:
             play_data.append(ReplayEventOsu(time_delta, x, y, Key(keys)))
         return rng_seed, play_data
 
-    def unpack_replay_data(self) -> Tuple[Optional[int], List[ReplayEventOsu]]:
+    def unpack_replay_data(
+        self: "_Unpacker",
+    ) -> Tuple[Optional[int], List[ReplayEventOsu]]:
         length = self.unpack_once("i")
         data = self.replay_data[self.offset : self.offset + length]
         data = lzma.decompress(data, format=lzma.FORMAT_AUTO)
@@ -112,14 +115,14 @@ class _unpacker:
         self.offset += length
         return self.parse_replay_data(data_str)
 
-    def unpack_replay_id(self) -> int:
+    def unpack_replay_id(self: "_Unpacker") -> int:
         try:
             replay_id = self.unpack_once("q")
         except struct.error:
             replay_id = self.unpack_once("l")
         return replay_id
 
-    def unpack_life_bar(self) -> Optional[List[LifeBarState]]:
+    def unpack_life_bar(self: "_Unpacker") -> Optional[List[LifeBarState]]:
         lifebar = self.unpack_string()
         if not lifebar:
             return None
@@ -131,12 +134,13 @@ class _unpacker:
 
 
 class Replay:
-    def __init__(self, replay_path: str, to_np: bool = True):
-        self._unpacker = _unpacker(Path(replay_path).read_bytes())
+    def __init__(self: "Replay", replay_path: str, to_np: bool = True) -> None:
+        self._unpacker = _Unpacker(Path(replay_path).read_bytes())
 
         # Only store the replay data we need
         if GameMode(self._unpacker.unpack_once("b")) != GameMode.STD:
-            raise ValueError("Only std replays are supported")
+            msg = "Only std replays are supported"
+            raise ValueError(msg)
         self._unpacker.unpack_once("i")  # game_version
         self._unpacker.unpack_string()  # beatmap_hash
         self._unpacker.unpack_string()  # username
@@ -167,7 +171,7 @@ class Replay:
         if self.to_np:
             self.replay_data_to_np()
 
-    def replay_data_to_np(self):
+    def replay_data_to_np(self: "Replay") -> None:
         t = 0
         # ignoring keys for now
         arr = np.zeros((len(self._replay_data), 3), dtype=np.float32)
@@ -179,7 +183,7 @@ class Replay:
         # sort by time
         self._replay_data = arr[arr[:, 0].argsort()]
 
-    def cursor(self, t):
+    def cursor(self: "Replay", t: int) -> Tuple[Tuple[float, float], float]:
         """
         interpolates linearly between events
         return cursor position + time since last click at time t (ms)
@@ -190,7 +194,8 @@ class Replay:
         # find closest event before t
         idx = np.searchsorted(self._replay_data[:, 0], t, side="right") - 1
         if idx < 0:
-            raise ValueError("t is before first event")
+            msg = "t is before first event"
+            raise ValueError(msg)
 
         # if t is after last event, return last event
         if idx == len(self._replay_data) - 1:

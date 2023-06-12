@@ -1,28 +1,28 @@
 import torch
+from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
-from einops import rearrange
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, dim):
+    def __init__(self: "RMSNorm", dim: int) -> None:
         super().__init__()
         self.scale = dim**0.5
         self.gamma = nn.Parameter(torch.ones(dim))
 
-    def forward(self, x):
+    def forward(self: "RMSNorm", x: torch.Tensor) -> torch.Tensor:
         normed = F.normalize(x, dim=-1)
         return normed * self.scale * self.gamma
 
 
 class Attention(nn.Module):
     def __init__(
-        self,
-        dim,
-        heads=8,
-        dim_head=64,
-        dropout=0.0,
-    ):
+        self: "Attention",
+        dim: int,
+        heads: int=8,
+        dim_head: int=64,
+        dropout: float=0.0,
+    ) -> None:
         super().__init__()
         self.heads = heads
         self.dropout = dropout
@@ -34,13 +34,11 @@ class Attention(nn.Module):
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
         self.to_out = nn.Linear(inner_dim, dim, bias=False)
 
-    def forward(self, x):
+    def forward(self: "Attention", x: torch.Tensor) -> torch.Tensor:
         x = self.norm(x)
 
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim=-1))  # type: ignore
-        q, k, v = map(
-            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), (q, k, v)
-        )
+        q, k, v = (rearrange(t, "b n (h d) -> b h n d", h=self.heads) for t in (q, k, v))
 
         with torch.backends.cuda.sdp_kernel(
             enable_flash=True,
@@ -61,14 +59,14 @@ class Attention(nn.Module):
 # Used for conditioning, after the current model is proven to work
 class CrossAttention(nn.Module):
     def __init__(
-        self,
-        dim,
-        context_dim,
-        heads=8,
-        dim_head=64,
-        norm_context=False,
-        dropout=0.0,
-    ):
+        self: "CrossAttention",
+        dim: int,
+        context_dim: int,
+        heads: int=8,
+        dim_head: int=64,
+        norm_context: bool=False,
+        dropout: float=0.0,
+    ) -> None:
         super().__init__()
         self.heads = heads
         self.dropout = dropout
@@ -84,14 +82,12 @@ class CrossAttention(nn.Module):
             nn.LayerNorm(dim),
         )
 
-    def forward(self, x, context):
+    def forward(self: "CrossAttention", x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
         x = self.norm(x)
         context = self.norm_context(context)
 
         q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim=-1))  # type: ignore
-        q, k, v = map(
-            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), (q, k, v)
-        )
+        q, k, v = (rearrange(t, "b n (h d) -> b h n d", h=self.heads) for t in (q, k, v))
 
         with torch.backends.cuda.sdp_kernel(
             enable_flash=True,

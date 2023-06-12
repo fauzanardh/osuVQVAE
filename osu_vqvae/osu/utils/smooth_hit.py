@@ -1,16 +1,19 @@
+from typing import List
+
 import numpy as np
+import numpy.typing as npt
 import scipy
 
 # std dev of impulse indicating a hit
 HIT_SD = 3
 
 
-def sigmoid(x):
+def sigmoid(x: npt.ArrayLike) -> npt.ArrayLike:
     """1/(e^-x + 1)"""
     return np.exp(-np.logaddexp(-x, 0))
 
 
-def encode_hit(sig, frame_times, i):
+def encode_hit(sig: npt.ArrayLike, frame_times: npt.ArrayLike, i: float) -> None:
     z = (frame_times - i) / HIT_SD
 
     # hits are impulses
@@ -20,7 +23,12 @@ def encode_hit(sig, frame_times, i):
     sig *= 1 - 2 * sigmoid(z)
 
 
-def encode_hold(sig, frame_times, i, j):
+def encode_hold(
+    sig: npt.ArrayLike,
+    frame_times: npt.ArrayLike,
+    i: float,
+    j: float,
+) -> None:
     m = 2 * sigmoid((j - i) / 2 / HIT_SD) - 1  # maximum value at (j-i)/2
     sig += (
         2
@@ -29,7 +37,7 @@ def encode_hold(sig, frame_times, i, j):
     )
 
 
-def flips(sig):
+def flips(sig: npt.ArrayLike) -> List[npt.ArrayLike]:
     sig_grad = np.gradient(sig)
     return (
         scipy.signal.find_peaks(sig_grad, height=0.5)[0].astype(int),
@@ -37,12 +45,12 @@ def flips(sig):
     )
 
 
-def decode_hit(sig):
+def decode_hit(sig: npt.ArrayLike) -> List[npt.ArrayLike]:
     rising, falling = flips(sig)
     return sorted([*rising, *falling])
 
 
-def decode_hold(sig):
+def decode_hold(sig: npt.ArrayLike) -> List[npt.ArrayLike]:
     rising, falling = flips(sig)
     start_idxs, end_idxs = list(rising), list(falling)
 

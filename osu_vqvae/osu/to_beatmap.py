@@ -1,8 +1,10 @@
 import bisect
+from typing import Dict, List, Optional, Tuple, Union
 
-import numpy as np
-import scipy
 import bezier
+import numpy as np
+import numpy.typing as npt
+import scipy
 
 from osu_vqvae.osu.hit_objects import TimingPoint
 from osu_vqvae.osu.utils.fit_bezier import fit_bezier
@@ -27,10 +29,10 @@ Version: {version}
 Tags: osu_vqvae
 
 [Difficulty]
-HPDrainRate: 0
+HPDrainRate: 8
 CircleSize: 4
-OverallDifficulty: 0
-ApproachRate: 9.5
+OverallDifficulty: 9
+ApproachRate: 10
 SliderMultiplier: 1
 SliderTickRate: 1
 
@@ -42,7 +44,9 @@ SliderTickRate: 1
 """
 
 
-def to_sorted_hits(hit_signal):
+def to_sorted_hits(
+    hit_signal: npt.ArrayLike,
+) -> List[Tuple[npt.ArrayLike, npt.ArrayLike, int, bool]]:
     """
     returns a list of tuples representing each hit object sorted by start:
         `(start_idx, end_idx, object_type, new_combo)`
@@ -72,16 +76,16 @@ def to_sorted_hits(hit_signal):
                 (s, e, 2, False)
                 for s, e in zip(sorted(spinner_start_idxs), sorted(spinner_end_idxs))
             ],
-        ]
+        ],
     )
 
     # associate hits with new combos
     for new_combo_idx in new_combo_idxs:
         idx = bisect.bisect_left(sorted_hits, (new_combo_idx,))
-        if idx == len(sorted_hits):
-            idx = idx - 1
-        elif idx > 0 and abs(new_combo_idx - sorted_hits[idx][0]) > abs(
-            sorted_hits[idx - 1][0] - new_combo_idx
+        if (idx == len(sorted_hits)) or (
+            idx > 0
+            and abs(new_combo_idx - sorted_hits[idx][0])
+            > abs(sorted_hits[idx - 1][0] - new_combo_idx)
         ):
             idx = idx - 1
         sorted_hits[idx] = (*sorted_hits[idx][:3], True)
@@ -89,7 +93,7 @@ def to_sorted_hits(hit_signal):
     return sorted_hits
 
 
-def to_playfield_coordinates(cursor_signal):
+def to_playfield_coordinates(cursor_signal: npt.ArrayLike) -> npt.ArrayLike:
     """
     transforms the cursor signal to osu!pixel coordinates
     """
@@ -105,7 +109,11 @@ def to_playfield_coordinates(cursor_signal):
     return (cursor_signal + 1) / 2 * np.array([[512], [384]])
 
 
-def to_slider_decoder(frame_times, cursor_signal, slider_signal):
+def to_slider_decoder(
+    frame_times: npt.ArrayLike,
+    cursor_signal: npt.ArrayLike,
+    slider_signal: npt.ArrayLike,
+) -> callable:
     """
     returns a function that takes a start and end frame index and returns:
     - slider length
@@ -117,7 +125,7 @@ def to_slider_decoder(frame_times, cursor_signal, slider_signal):
     repeat_idxs = decode_hit(repeat_sig)
     seg_boundary_idxs = decode_hit(seg_boundary_sig)
 
-    def decoder(a, b):
+    def decoder(a: int, b: int) -> Tuple[float, int, npt.ArrayLike]:
         repeat_idx_in_range = [r for r in repeat_idxs if a < r < b]
         if len(repeat_idx_in_range) == 0:
             slides = 1
@@ -129,7 +137,7 @@ def to_slider_decoder(frame_times, cursor_signal, slider_signal):
         ctrl_pts = []
         length = 0
         sb_idxs = [s for s in seg_boundary_idxs if a < s < r]
-        for seg_start, seg_end in zip([a] + sb_idxs, sb_idxs + [r]):
+        for seg_start, seg_end in zip([a, *sb_idxs], [*sb_idxs, r]):
             for b in fit_bezier(cursor_signal.T[seg_start : seg_end + 1], max_err=100):
                 b = np.array(b).round().astype(int)
                 ctrl_pts.extend(b)
@@ -139,10 +147,18 @@ def to_slider_decoder(frame_times, cursor_signal, slider_signal):
     return decoder
 
 
-def to_beatmap(metadata, sig, frame_times, timing):
+def to_beatmap(  # noqa: C901
+    metadata: Dict,
+    sig: npt.ArrayLike,
+    frame_times: npt.ArrayLike,
+    timing: Optional[Union[int, List[TimingPoint]]],
+) -> str:
     """
     returns the beatmap as the string contents of the beatmap file
     """
+
+    # ignore auxilliary signals
+    sig = sig[6:]
 
     hit_signal, sig = np.split(sig, (4,))
     slider_signal, sig = np.split(sig, (2,))
@@ -181,7 +197,7 @@ def to_beatmap(metadata, sig, frame_times, timing):
         timing_beat_len = 60.0 * 1000.0 / float(timing)
         # compute timing offset
         offset_dist = scipy.stats.gaussian_kde(
-            [frame_times[i] % timing_beat_len for i, _, _, _ in sorted_hits]
+            [frame_times[i] % timing_beat_len for i, _, _, _ in sorted_hits],
         )
         offset = (
             offset_dist.pdf(np.linspace(0, timing_beat_len, 1000)).argmax()
@@ -190,7 +206,7 @@ def to_beatmap(metadata, sig, frame_times, timing):
         )
 
         beat_snap, timing_points = True, [
-            TimingPoint(offset, timing_beat_len, None, 4, None)
+            TimingPoint(offset, timing_beat_len, None, 4, None),
         ]
 
     hos = []  # hit objects
@@ -205,17 +221,17 @@ def to_beatmap(metadata, sig, frame_times, timing):
     base_slider_vel = 100 / beat_length
     beat_offset = timing_points[0].t
 
-    def add_hit_circle(i, j, t, u, new_combo):
+    def add_hit_circle(i: int, j: int, t: int, u: int, new_combo: bool) -> None:
         x, y = cursor_signal[:, i].round().astype(int)
         hos.append(f"{x},{y},{t},{1 + new_combo},0,0:0:0:0:")
 
-    def add_spinner(i, j, t, u, new_combo):
+    def add_spinner(i: int, j: int, t: int, u: int, new_combo: bool) -> None:
         if t == u:
             # start and end time are the same, add a hit circle instead
             return add_hit_circle(i, j, t, u, new_combo)
         hos.append(f"256,192,{t},{8 + new_combo},0,{u}")
 
-    def add_slider(i, j, t, u, new_combo):
+    def add_slider(i: int, j: int, t: int, u: int, new_combo: bool) -> None:
         if t == u:
             # start and end time are the same, add a hit circle instead
             return add_hit_circle(i, j, t, u, new_combo)
@@ -226,11 +242,11 @@ def to_beatmap(metadata, sig, frame_times, timing):
             # slider has zero length, add a hit circle instead
             return add_hit_circle(i, j, t, u, new_combo)
 
-        SV = length * slides / (u - t) / base_slider_vel
-        if SV > 10 or SV < 0.1:
+        _sv = length * slides / (u - t) / base_slider_vel
+        if _sv > 10 or _sv < 0.1:
             print(
                 "warning: SV > 10 or SV < .1 not supported, will result in bad sliders:",
-                SV,
+                _sv,
             )
 
         x1, y1 = ctrl_pts[0]
@@ -239,9 +255,9 @@ def to_beatmap(metadata, sig, frame_times, timing):
 
         if len(tps) == 0:
             print(
-                "warning: inherited timing point added before any uninherited timing points"
+                "warning: inherited timing point added before any uninherited timing points",
             )
-        tps.append(f"{t},{-100/SV},4,0,0,50,0,0")
+        tps.append(f"{t},{-100/_sv},4,0,0,50,0,0")
 
     last_up = None
     for i, j, t_type, new_combo in sorted_hits:
@@ -266,10 +282,16 @@ def to_beatmap(metadata, sig, frame_times, timing):
             continue
 
         [add_hit_circle, add_slider, add_spinner][t_type](
-            i, j, t, u, 4 if new_combo else 0
+            i,
+            j,
+            t,
+            u,
+            4 if new_combo else 0,
         )
         last_up = u
 
     return map_template.format(
-        **metadata, timing_points="\n".join(tps), hit_objects="\n".join(hos)
+        **metadata,
+        timing_points="\n".join(tps),
+        hit_objects="\n".join(hos),
     )

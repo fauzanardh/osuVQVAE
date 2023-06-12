@@ -1,15 +1,16 @@
+import bisect
 import re
 from pathlib import Path
+from typing import Any, Dict, Generator, List, Tuple
 
-import bisect
 import numpy as np
 
-from osu_vqvae.osu.hit_objects import Timed, TimingPoint, Circle, Spinner, Slider
+from osu_vqvae.osu.hit_objects import Circle, Slider, Spinner, Timed, TimingPoint
 from osu_vqvae.osu.sliders import from_control_points
 
 
 class Beatmap:
-    def __init__(self, filename, meta_only=False):
+    def __init__(self: "Beatmap", filename: Path, meta_only: bool = False) -> None:
         self.filename = Path(filename)
         with open(filename, encoding="utf-8") as f:
             cfg = self.parse_map_file(f)
@@ -50,7 +51,7 @@ class Beatmap:
         if not meta_only:
             self.parse_map_data()
 
-    def parse_timing_points(self, lines):
+    def parse_timing_points(self: "Beatmap", lines: List[str]) -> None:
         self.timing_points = []
         self.uninherited_timing_points = []
 
@@ -88,16 +89,17 @@ class Beatmap:
                 self.uninherited_timing_points.append(utp)
 
         if len(self.timing_points) == 0:
-            raise ValueError("no uninherited timing points")
+            msg = "no uninherited timing points"
+            raise ValueError(msg)
 
-    def get_active_timing_point(self, t):
+    def get_active_timing_point(self: "Beatmap", t: int) -> TimingPoint:
         idx = bisect.bisect(self.timing_points, Timed(t)) - 1
         if idx < 0:
             idx = 0
 
         return self.timing_points[idx]
 
-    def parse_hit_objects(self, lines):
+    def parse_hit_objects(self: "Beatmap", lines: List[str]) -> None:
         self.hit_objects = []
         for line in lines:
             spl = line.strip().split(",")
@@ -126,23 +128,25 @@ class Beatmap:
                 ho = Spinner(t, new_combo, int(spl[5]))
 
             if len(self.hit_objects) and ho.t < self.hit_objects[-1].end_time():
+                msg = f"hit object starts before previous hit object ends: {t}"
                 raise ValueError(
-                    f"hit object starts before previous hit object ends: {t}"
+                    msg,
                 )
 
             self.hit_objects.append(ho)
 
         if len(self.hit_objects) == 0:
-            raise ValueError("no hit objects")
+            msg = "no hit objects"
+            raise ValueError(msg)
 
-    def parse_events(self, lines):
+    def parse_events(self: "Beatmap", lines: List[str]) -> None:
         self.events = []
         for line in lines:
             ev = line.strip().split(",")
             if ev[0] == 2:
                 self.events.append(ev)
 
-    def parse_map_data(self):
+    def parse_map_data(self: "Beatmap") -> None:
         self.parse_timing_points(self.unparsed_timingpoints)
         del self.unparsed_timingpoints
 
@@ -152,7 +156,7 @@ class Beatmap:
         self.parse_events(self.unparsed_events)
         del self.unparsed_events
 
-    def cursor(self, t):
+    def cursor(self: "Beatmap", t: int) -> Tuple[Tuple[int, int], float]:  # noqa: C901
         """
         return cursor position + time since last click at time t (ms)
         """
@@ -193,7 +197,6 @@ class Beatmap:
             else:  # moving
                 t -= spin_duration
                 if nho:  # to next hit object
-
                     f = t / (nho.t - ho.t - spin_duration)  # interpolation factor
                     return ((1 - f) * cx + f * nx, (1 - f) * cy + f * ny), t
                 else:  # last object
@@ -228,8 +231,8 @@ class Beatmap:
                     return (end[0], end[1]), t
 
     @staticmethod
-    def parse_map_file(bmlines):
-        LIST_SECTIONS = ["Events", "TimingPoints", "HitObjects"]
+    def parse_map_file(bmlines: List[str]) -> Dict[str, Any]:
+        list_sections = ["Events", "TimingPoints", "HitObjects"]
         cfg = {}
         section = None
         for line in bmlines:
@@ -243,7 +246,7 @@ class Beatmap:
             m = re.search(r"^\[(.*)\]$", line)
             if m is not None:
                 section = m.group(1)
-                if section in LIST_SECTIONS:
+                if section in list_sections:
                     cfg[section] = []
                 else:
                     cfg[section] = {}
@@ -252,7 +255,7 @@ class Beatmap:
             if section is None:
                 continue
 
-            if section in LIST_SECTIONS:
+            if section in list_sections:
                 cfg[section].append(line.strip())
             else:
                 m = re.search(r"^(\w*)\s?:\s?(.*)$", line)
@@ -261,7 +264,7 @@ class Beatmap:
         return cfg
 
     @classmethod
-    def all_maps(cls, src_path: str):
+    def all_maps(cls: "Beatmap", src_path: str) -> Generator["Beatmap", None, None]:
         for path in Path(src_path).glob("*/*.osu"):
             try:
                 bm = Beatmap(path)
@@ -275,7 +278,10 @@ class Beatmap:
             yield bm
 
     @classmethod
-    def all_mapsets(cls, src_path: str):
+    def all_mapsets(  # noqa: C901
+        cls: "Beatmap",
+        src_path: str,
+    ) -> Generator[Tuple[int, str, List["Beatmap"]], None, None]:
         for mapset_dir in Path(src_path).iterdir():
             if not mapset_dir.is_dir():
                 continue

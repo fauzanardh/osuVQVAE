@@ -1,20 +1,25 @@
+from typing import Tuple, Union
+
 import torch
+from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
-
-from einops import rearrange
 from vector_quantize_pytorch import ResidualVQ
 
-from osu_vqvae.modules.scaler import UpsampleLinear, DownsampleLinear
 from osu_vqvae.modules.discriminator import Discriminator
+from osu_vqvae.modules.scaler import DownsampleLinear, UpsampleLinear
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 
 
-def log(t, eps=1e-10):
+def log(t: torch.Tensor, eps: int = 1e-10) -> torch.Tensor:
     return torch.log(t + eps)
 
 
-def gradient_penalty(sig, output, weight=10):
+def gradient_penalty(
+    sig: torch.Tensor,
+    output: torch.Tensor,
+    weight: int = 10,
+) -> torch.Tensor:
     gradients = torch.autograd.grad(
         outputs=output,
         inputs=sig,
@@ -28,33 +33,33 @@ def gradient_penalty(sig, output, weight=10):
     return weight * ((gradients.norm(2, dim=-1) - 1) ** 2).mean()
 
 
-def bce_discriminator_loss(fake, real):
+def bce_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
     return (-log(1 - torch.sigmoid(fake)) - log(torch.sigmoid(real))).mean()
 
 
-def bce_generator_loss(fake):
+def bce_generator_loss(fake: torch.Tensor) -> torch.Tensor:
     return -log(torch.sigmoid(fake)).mean()
 
 
-def hinge_discriminator_loss(fake, real):
+def hinge_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
     return (F.relu(1 + fake) + F.relu(1 - real)).mean()
 
 
-def hinge_generator_loss(fake):
+def hinge_generator_loss(fake: torch.Tensor) -> torch.Tensor:
     return -fake.mean()
 
 
 class EncoderAttn(nn.Module):
     def __init__(
-        self,
-        dim_in,
-        dim_h,
-        dim_h_mult=(1, 2, 4, 8),
-        attn_depth=(2, 2, 2, 4),
-        attn_heads=8,
-        attn_dim_head=64,
-        attn_window_size=1024,
-    ):
+        self: "EncoderAttn",
+        dim_in: int,
+        dim_h: int,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        attn_depth: Tuple[int] = (2, 2, 2, 4),
+        attn_heads: int = 8,
+        attn_dim_head: int = 64,
+        attn_window_size: int = 1024,
+    ) -> None:
         super().__init__()
         self.init_conv = nn.Conv1d(dim_in, dim_h, 7, padding=3)
 
@@ -77,8 +82,8 @@ class EncoderAttn(nn.Module):
                             dim_head=attn_dim_head,
                             window_size=attn_window_size,
                         ),
-                    ]
-                )
+                    ],
+                ),
             )
 
         # Middle
@@ -91,7 +96,7 @@ class EncoderAttn(nn.Module):
             window_size=attn_window_size,
         )
 
-    def forward(self, x):
+    def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
         x = self.init_conv(x)
         x = rearrange(x, "b c l -> b l c")
 
@@ -108,16 +113,16 @@ class EncoderAttn(nn.Module):
 
 class DecoderAttn(nn.Module):
     def __init__(
-        self,
-        dim_in,
-        dim_h,
-        dim_h_mult=(1, 2, 4, 8),
-        attn_depth=(2, 2, 2, 4),
-        attn_heads=8,
-        attn_dim_head=64,
-        attn_window_size=1024,
-        use_tanh=False,
-    ):
+        self: "DecoderAttn",
+        dim_in: int,
+        dim_h: int,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        attn_depth: Tuple[int] = (2, 2, 2, 4),
+        attn_heads: int = 8,
+        attn_dim_head: int = 64,
+        attn_window_size: int = 1024,
+        use_tanh: bool = False,
+    ) -> None:
         super().__init__()
         self.use_tanh = use_tanh
 
@@ -152,14 +157,14 @@ class DecoderAttn(nn.Module):
                             dim_head=attn_dim_head,
                             window_size=attn_window_size,
                         ),
-                    ]
-                )
+                    ],
+                ),
             )
 
         # End
         self.end_conv = nn.Conv1d(dim_h, dim_in, 1)
 
-    def forward(self, x):
+    def forward(self: "DecoderAttn", x: torch.Tensor) -> torch.Tensor:
         # Middle
         x = self.mid_attn(x)
 
@@ -177,23 +182,23 @@ class DecoderAttn(nn.Module):
 
 class VQVAE(nn.Module):
     def __init__(
-        self,
-        dim_in,
-        dim_h,
-        n_emb,
-        dim_h_mult=(1, 2, 4, 8),
-        attn_depth=(2, 2, 2, 4),
-        attn_heads=8,
-        attn_dim_head=64,
-        attn_window_size=1024,
-        num_codebooks=8,
-        vq_decay=0.9,
-        rvq_quantize_dropout=True,
-        use_discriminator=False,
-        discriminator_layers=3,
-        use_tanh=False,
-        use_hinge_loss=False,
-    ):
+        self: "VQVAE",
+        dim_in: int,
+        dim_h: int,
+        n_emb: int,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        attn_depth: Tuple[int] = (2, 2, 2, 4),
+        attn_heads: int = 8,
+        attn_dim_head: int = 64,
+        attn_window_size: int = 1024,
+        num_codebooks: int = 8,
+        vq_decay: float = 0.9,
+        rvq_quantize_dropout: bool = True,
+        use_discriminator: bool = False,
+        discriminator_layers: int = 4,
+        use_tanh: bool = False,
+        use_hinge_loss: bool = False,
+    ) -> None:
         super().__init__()
 
         self.encoder = EncoderAttn(
@@ -233,7 +238,7 @@ class VQVAE(nn.Module):
 
         # Discriminator
         if use_discriminator:
-            layer_mults = list(map(lambda x: 2**x, range(discriminator_layers)))
+            layer_mults = [2**x for x in range(discriminator_layers)]
             layer_dims = [dim_h * mult for mult in layer_mults]
             self.discriminator = Discriminator(
                 dim_in,
@@ -247,32 +252,28 @@ class VQVAE(nn.Module):
                 hinge_discriminator_loss if use_hinge_loss else bce_discriminator_loss
             )
 
-    @property
-    def codebook(self):
-        return self.vq.codebooks
-
-    def encode(self, x):
+    def encode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
         x = self.encoder_norm(x)
         return self.vq(x)
 
-    def decode(self, x):
+    def decode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
         return self.decoder(x)
 
-    def decode_from_ids(self, ids):
+    def decode_from_ids(self: "VQVAE", ids: torch.Tensor) -> torch.Tensor:
         codes = self.codebook[ids]
         fmap = self.vq.project_out(codes)
         # fmap = rearrange(fmap, "b l c -> b c l")
         return self.decode(fmap)
 
     def forward(
-        self,
-        sig,
-        return_loss=False,
-        return_disc_loss=False,
-        return_recons=True,
-        add_gradient_penalty=False,
-    ):
+        self: "VQVAE",
+        sig: torch.Tensor,
+        return_loss: float = False,
+        return_disc_loss: float = False,
+        return_recons: float = True,
+        add_gradient_penalty: float = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         # limit sig to [-1, 1] range
         sig = torch.clamp(sig, -1, 1)
 
