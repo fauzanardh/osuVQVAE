@@ -337,6 +337,8 @@ class VQVAE(nn.Module):
                 if add_gradient_penalty:
                     disc_loss += gradient_penalty(real, disc_loss)
 
+                disc_losses.append(disc_loss)
+
             # convert to tensor
             disc_losses = torch.stack(disc_losses)
 
