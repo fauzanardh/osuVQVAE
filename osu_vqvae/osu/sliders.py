@@ -2,8 +2,9 @@ from typing import List, Tuple
 
 import bezier
 import numpy as np
+import numpy.typing as npt
 
-from osu_vqvae.osu.hit_objects import NDIntArray, Slider
+from osu_vqvae.osu.hit_objects import Slider
 
 
 def approx_eq(a: int, b: int) -> bool:
@@ -28,8 +29,8 @@ class Line(Slider):
         new_combo: bool,
         slides: int,
         length: float,
-        start: NDIntArray,
-        end: NDIntArray,
+        start: npt.ArrayLike,
+        end: npt.ArrayLike,
     ) -> None:
         super().__init__(t, beat_length, sldier_mult, new_combo, slides, length)
         self.start = start
@@ -37,11 +38,11 @@ class Line(Slider):
         vec = end - self.start
         self.end = self.start + vec / np.linalg.norm(vec) * length
 
-    def lerp(self: "Line", t: float) -> NDIntArray:
+    def lerp(self: "Line", t: float) -> npt.ArrayLike:
         out = (1 - t) * self.start + t * self.end
         return out.round(0).astype(np.int32)
 
-    def vel(self: "Line", t: float) -> NDIntArray:
+    def vel(self: "Line", t: float) -> npt.ArrayLike:
         out = (self.end - self.start) / (self.slide_duration / self.slides)
         return out.round(0).astype(np.int32)
 
@@ -55,7 +56,7 @@ class Perfect(Slider):
         new_combo: bool,
         slides: int,
         length: float,
-        center: NDIntArray,
+        center: npt.ArrayLike,
         radius: float,
         start: float,
         end: float,
@@ -67,12 +68,12 @@ class Perfect(Slider):
 
         self.end = start + length / radius * np.sign(end - start)
 
-    def lerp(self: "Perfect", t: float) -> NDIntArray:
+    def lerp(self: "Perfect", t: float) -> npt.ArrayLike:
         theta = (1 - t) * self.start + t * self.end
         out = self.center + self.radius * np.array([np.cos(theta), np.sin(theta)])
         return out.round(0).astype(np.int32)
 
-    def vel(self: "Perfect", t: float) -> NDIntArray:
+    def vel(self: "Perfect", t: float) -> npt.ArrayLike:
         theta = (1 - t) * self.start + t * self.end
         out = (
             self.radius
@@ -93,12 +94,12 @@ class Bezier(Slider):
         new_combo: bool,
         slides: int,
         length: float,
-        control_points: List[NDIntArray],
+        control_points: List[npt.ArrayLike],
     ) -> None:
         super().__init__(t, beat_length, slider_mult, new_combo, slides, length)
         self.control_points = control_points
 
-        control_curves: List[List[NDIntArray]] = []
+        control_curves: List[List[npt.ArrayLike]] = []
         last_idx = 0
         for i, point in enumerate(control_points[1:]):
             if (control_points[i] == point).all():
@@ -146,11 +147,11 @@ class Bezier(Slider):
         t = (t - range_start) / (range_end - range_start)
         return int(idx), t
 
-    def lerp(self: "Bezier", t: float) -> NDIntArray:
+    def lerp(self: "Bezier", t: float) -> npt.ArrayLike:
         idx, t = self.curve_reparameterize(t)
         return self.path_segments[idx].evaluate(t)[:, 0].round(0).astype(np.int32)
 
-    def vel(self: "Bezier", t: float) -> NDIntArray:
+    def vel(self: "Bezier", t: float) -> npt.ArrayLike:
         idx, t = self.curve_reparameterize(t)
         out = self.path_segments[idx].evaluate_hodograph(t)[:, 0] / (
             self.slide_duration / self.slides
@@ -165,7 +166,7 @@ def from_control_points(
     new_combo: bool,
     slides: int,
     length: float,
-    control_points: List[NDIntArray],
+    control_points: List[npt.ArrayLike],
 ) -> Slider:
     assert len(control_points) >= 2, "control points must have at least 2 points"
 
