@@ -74,7 +74,6 @@ class EncoderAttn(nn.Module):
                             depth=attn_depth[ind],
                             heads=attn_heads,
                             dim_head=attn_dim_head,
-                            window_size=1024,
                         ),
                     ]
                 )
@@ -87,7 +86,6 @@ class EncoderAttn(nn.Module):
             depth=attn_depth[0],
             heads=attn_heads,
             dim_head=attn_dim_head,
-            window_size=1024,
         )
 
     def forward(self, x):
@@ -132,7 +130,6 @@ class DecoderAttn(nn.Module):
             depth=attn_depth[0],
             heads=attn_heads,
             dim_head=attn_dim_head,
-            window_size=1024,
         )
 
         # Up
@@ -148,7 +145,6 @@ class DecoderAttn(nn.Module):
                             depth=attn_depth[ind],
                             heads=attn_heads,
                             dim_head=attn_dim_head,
-                            window_size=1024,
                         ),
                     ]
                 )
