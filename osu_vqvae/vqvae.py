@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Tuple, Union
 
 import torch
@@ -7,7 +8,7 @@ from torch.nn import functional as F
 from vector_quantize_pytorch import GroupedResidualVQ
 
 from osu_vqvae.modules.causal_convolution import CausalConv1d
-from osu_vqvae.modules.discriminator import Discriminator
+from osu_vqvae.modules.discriminator import MultiScaleDiscriminator
 from osu_vqvae.modules.scaler import DownsampleLinear, UpsampleLinear
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 
@@ -221,8 +222,7 @@ class VQVAE(nn.Module):
         vq_commitment_weight: float = 1.0,
         vq_quantize_dropout_cutoff_index: int = 1,
         vq_stochastic_sample_codes: bool = False,
-        use_discriminator: bool = False,
-        discriminator_layers: int = 4,
+        discriminator_scales: Tuple[float] = (1.0, 0.5, 0.25),
         use_tanh: bool = False,
         use_hinge_loss: bool = False,
     ) -> None:
@@ -267,20 +267,28 @@ class VQVAE(nn.Module):
         )
 
         # Discriminator
-        if use_discriminator:
-            layer_mults = [2**x for x in range(discriminator_layers)]
-            layer_dims = [dim_h * mult for mult in layer_mults]
-            self.discriminator = Discriminator(
-                dim_in,
-                layer_dims,
-            )
+        self.discriminators = nn.ModuleList(
+            [
+                MultiScaleDiscriminator(dim_in=dim_in)
+                for _ in range(len(discriminator_scales))
+            ],
+        )
+        disc_relative_factors = [
+            int(s1 / s2)
+            for s1, s2 in zip(discriminator_scales[:-1], discriminator_scales[1:])
+        ]
+        self.discriminator_downsamples = nn.ModuleList(
+            [nn.Identity()]
+            + [
+                nn.AvgPool1d(2 * factor, stride=factor, padding=factor)
+                for factor in disc_relative_factors
+            ],
+        )
 
-            self.gen_loss = (
-                hinge_generator_loss if use_hinge_loss else bce_generator_loss
-            )
-            self.disc_loss = (
-                hinge_discriminator_loss if use_hinge_loss else bce_discriminator_loss
-            )
+        self.gen_loss = hinge_generator_loss if use_hinge_loss else bce_generator_loss
+        self.disc_loss = (
+            hinge_discriminator_loss if use_hinge_loss else bce_discriminator_loss
+        )
 
     def encode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
@@ -303,40 +311,79 @@ class VQVAE(nn.Module):
         return_recons: float = True,
         add_gradient_penalty: float = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        # limit sig to [-1, 1] range
-        sig = torch.clamp(sig, -1, 1)
+        orig_sig = sig.clone()
 
-        fmap, _, commit_loss = self.encode(sig)
-        fmap = self.decode(fmap)
+        sig, _, commit_loss = self.encode(sig)
+        recon_sig = self.decode(sig)
 
         if not (return_loss or return_disc_loss):
-            return fmap
+            return recon_sig
 
         # Discriminator
-        if return_disc_loss and hasattr(self, "discriminator"):
-            fmap.detach_()
-            sig.requires_grad_()
+        if return_disc_loss:
+            real, fake = orig_sig, recon_sig.detach()
+            disc_losses = []
+            for discriminator, downsample in zip(
+                self.discriminators,
+                self.discriminator_downsamples,
+            ):
+                real, fake = map(downsample, (real, fake))
+                real_disc_logits, fake_disc_logits = map(
+                    discriminator,
+                    (real.requires_grad_(), fake),
+                )
+                disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
 
-            fmap_disc_logits, sig_disc_logits = map(self.discriminator, (fmap, sig))
-            loss = self.disc_loss(fmap_disc_logits, sig_disc_logits)
+                if add_gradient_penalty:
+                    disc_loss += gradient_penalty(real, disc_loss)
 
-            if add_gradient_penalty:
-                loss += gradient_penalty(sig, sig_disc_logits)
+            # convert to tensor
+            disc_losses = torch.stack(disc_losses)
 
-            if return_recons:
-                return loss, fmap
+            if return_loss:
+                return disc_losses.sum(), recon_sig
             else:
-                return loss
+                return disc_losses.sum()
 
-        recon_loss = F.mse_loss(fmap, sig)
+        recon_loss = F.mse_loss(orig_sig, recon_sig)
 
         # Generator
-        gen_loss = 0
-        if hasattr(self, "discriminator"):
-            gen_loss = self.gen_loss(self.discriminator(fmap))
+        real, fake = orig_sig, recon_sig
+        gen_losses = []
+        disc_intermediates = []
+        for discriminator, downsample in zip(
+            self.discriminators,
+            self.discriminator_downsamples,
+        ):
+            real, fake = map(downsample, (real, fake))
+            (real_disc_logits, real_disc_intermediates), (
+                fake_disc_logits,
+                fake_disc_intermediates,
+            ) = map(partial(discriminator, return_intermediates=True), (real, fake))
+            disc_intermediates.append(
+                (real_disc_intermediates, fake_disc_intermediates),
+            )
 
-        loss = recon_loss + gen_loss + commit_loss.sum()
+            gen_loss = self.gen_loss(fake_disc_logits)
+            gen_losses.append(gen_loss)
+
+        feature_losses = []
+        for real_disc_intermediates, fake_disc_intermediates in disc_intermediates:
+            losses = [
+                F.l1_loss(real_disc_intermediate, fake_disc_intermediate)
+                for real_disc_intermediate, fake_disc_intermediate in zip(
+                    real_disc_intermediates,
+                    fake_disc_intermediates,
+                )
+            ]
+            feature_losses.extend(losses)
+
+        # convert to tensor
+        gen_losses = torch.stack(gen_losses)
+        feature_losses = torch.stack(feature_losses)
+
+        loss = recon_loss + gen_losses.sum() + feature_losses.sum() + commit_loss.sum()
         if return_recons:
-            return loss, fmap
+            return loss, recon_sig
         else:
             return loss
