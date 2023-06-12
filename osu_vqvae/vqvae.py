@@ -342,7 +342,7 @@ class VQVAE(nn.Module):
             # convert to tensor
             disc_losses = torch.stack(disc_losses)
 
-            if return_loss:
+            if return_recons:
                 return disc_losses.sum(), recon_sig
             else:
                 return disc_losses.sum()
