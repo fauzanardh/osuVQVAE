@@ -335,7 +335,7 @@ class VQVAE(nn.Module):
                 disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
 
                 if add_gradient_penalty:
-                    disc_loss += gradient_penalty(real, fake_disc_logits)
+                    disc_loss += gradient_penalty(real, disc_loss)
 
                 disc_losses.append(disc_loss)
 
