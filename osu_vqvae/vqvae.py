@@ -114,7 +114,6 @@ class EncoderAttn(nn.Module):
         x = self.mid_attn(x)
 
         # Project to embedding space
-        # Project from embedding space
         # annoyingly, conv1d expects (batch, channels, length)
         # while the rest of the model expects (batch, length, channels)
         x = rearrange(x, "b l c -> b c l")
