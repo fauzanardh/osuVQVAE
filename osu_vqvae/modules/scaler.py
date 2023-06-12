@@ -18,7 +18,12 @@ class UpsampleConv(nn.Module):
 
 
 class UpsampleLinear(nn.Module):
-    def __init__(self: "UpsampleLinear", dim_in: int, dim_out: int, factor: int=2) -> None:
+    def __init__(
+        self: "UpsampleLinear",
+        dim_in: int,
+        dim_out: int,
+        factor: int = 2,
+    ) -> None:
         super().__init__()
 
         self.factor = factor
@@ -26,7 +31,9 @@ class UpsampleLinear(nn.Module):
         linear = nn.Linear(dim_in, dim_out * factor)
         self.init_(linear)
         self.up = nn.Sequential(
-            linear, nn.SiLU(), Rearrange("b l (p c) -> b (l p) c", p=factor),
+            linear,
+            nn.SiLU(),
+            Rearrange("b l (p c) -> b (l p) c", p=factor),
         )
 
     def init_(self: "UpsampleLinear", linear: torch.nn.Module) -> None:
@@ -49,7 +56,8 @@ class DownsampleConv(nn.Module):
     def __init__(self: "DownsampleConv", dim_in: int, dim_out: int) -> None:
         super().__init__()
         self.down = nn.Sequential(
-            nn.Conv1d(dim_in, dim_out, 4, stride=2, padding=1), nn.LeakyReLU(0.1),
+            nn.Conv1d(dim_in, dim_out, 4, stride=2, padding=1),
+            nn.LeakyReLU(0.1),
         )
 
     def forward(self: "DownsampleConv", x: torch.Tensor) -> torch.Tensor:
@@ -58,7 +66,12 @@ class DownsampleConv(nn.Module):
 
 
 class DownsampleLinear(nn.Module):
-    def __init__(self: "DownsampleLinear", dim_in: int, dim_out: int, factor: int=2) -> None:
+    def __init__(
+        self: "DownsampleLinear",
+        dim_in: int,
+        dim_out: int,
+        factor: int = 2,
+    ) -> None:
         super().__init__()
         self.down = nn.Sequential(
             Rearrange("b (l p) c -> b l (p c)", p=factor),

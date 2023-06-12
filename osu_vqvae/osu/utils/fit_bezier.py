@@ -34,7 +34,9 @@ def normalize(v: npt.ArrayLike) -> npt.ArrayLike:
 
 
 def compute_error(
-    p: npt.ArrayLike, points: npt.ArrayLike, u: npt.ArrayLike
+    p: npt.ArrayLike,
+    points: npt.ArrayLike,
+    u: npt.ArrayLike,
 ) -> npt.ArrayLike:
     errs = ((q(p, u) - points) ** 2).sum(-1)
     split_point = errs.argmax()

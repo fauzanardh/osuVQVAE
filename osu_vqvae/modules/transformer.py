@@ -19,7 +19,7 @@ class GEGLU(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self: "FeedForward", dim: int, mult: int=4) -> None:
+    def __init__(self: "FeedForward", dim: int, mult: int = 4) -> None:
         super().__init__()
         hidden_dim = int(dim * mult * 2 / 3)
         self.layers = nn.Sequential(
@@ -37,9 +37,9 @@ class TransformerBlock(nn.Module):
     def __init__(
         self: "TransformerBlock",
         dim: int,
-        depth: int=1,
-        heads: int=8,
-        dim_head: int=64,
+        depth: int = 1,
+        heads: int = 8,
+        dim_head: int = 64,
     ) -> None:
         super().__init__()
         self.layers = nn.ModuleList([])
@@ -64,10 +64,10 @@ class LocalTransformerBlock(nn.Module):
     def __init__(
         self: "LocalTransformerBlock",
         dim: int,
-        depth: int=1,
-        heads: int=8,
-        dim_head: int=64,
-        window_size: int=512,
+        depth: int = 1,
+        heads: int = 8,
+        dim_head: int = 64,
+        window_size: int = 512,
     ) -> None:
         super().__init__()
         self.layers = nn.ModuleList([])

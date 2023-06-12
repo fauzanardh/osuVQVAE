@@ -19,9 +19,9 @@ class Attention(nn.Module):
     def __init__(
         self: "Attention",
         dim: int,
-        heads: int=8,
-        dim_head: int=64,
-        dropout: float=0.0,
+        heads: int = 8,
+        dim_head: int = 64,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.heads = heads
@@ -38,7 +38,9 @@ class Attention(nn.Module):
         x = self.norm(x)
 
         q, k, v = (self.to_q(x), *self.to_kv(x).chunk(2, dim=-1))  # type: ignore
-        q, k, v = (rearrange(t, "b n (h d) -> b h n d", h=self.heads) for t in (q, k, v))
+        q, k, v = (
+            rearrange(t, "b n (h d) -> b h n d", h=self.heads) for t in (q, k, v)
+        )
 
         with torch.backends.cuda.sdp_kernel(
             enable_flash=True,
@@ -62,10 +64,10 @@ class CrossAttention(nn.Module):
         self: "CrossAttention",
         dim: int,
         context_dim: int,
-        heads: int=8,
-        dim_head: int=64,
-        norm_context: bool=False,
-        dropout: float=0.0,
+        heads: int = 8,
+        dim_head: int = 64,
+        norm_context: bool = False,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.heads = heads
@@ -82,12 +84,18 @@ class CrossAttention(nn.Module):
             nn.LayerNorm(dim),
         )
 
-    def forward(self: "CrossAttention", x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self: "CrossAttention",
+        x: torch.Tensor,
+        context: torch.Tensor,
+    ) -> torch.Tensor:
         x = self.norm(x)
         context = self.norm_context(context)
 
         q, k, v = (self.to_q(x), *self.to_kv(context).chunk(2, dim=-1))  # type: ignore
-        q, k, v = (rearrange(t, "b n (h d) -> b h n d", h=self.heads) for t in (q, k, v))
+        q, k, v = (
+            rearrange(t, "b n (h d) -> b h n d", h=self.heads) for t in (q, k, v)
+        )
 
         with torch.backends.cuda.sdp_kernel(
             enable_flash=True,
