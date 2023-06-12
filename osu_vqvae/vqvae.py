@@ -53,6 +53,7 @@ class EncoderAttn(nn.Module):
         attn_depth=(2, 2, 2, 4),
         attn_heads=8,
         attn_dim_head=64,
+        attn_window_size=1024,
     ):
         super().__init__()
         self.init_conv = nn.Conv1d(dim_in, dim_h, 7, padding=3)
@@ -74,6 +75,7 @@ class EncoderAttn(nn.Module):
                             depth=attn_depth[ind],
                             heads=attn_heads,
                             dim_head=attn_dim_head,
+                            window_size=attn_window_size,
                         ),
                     ]
                 )
@@ -86,6 +88,7 @@ class EncoderAttn(nn.Module):
             depth=attn_depth[0],
             heads=attn_heads,
             dim_head=attn_dim_head,
+            window_size=attn_window_size,
         )
 
     def forward(self, x):
@@ -112,6 +115,7 @@ class DecoderAttn(nn.Module):
         attn_depth=(2, 2, 2, 4),
         attn_heads=8,
         attn_dim_head=64,
+        attn_window_size=1024,
         use_tanh=False,
     ):
         super().__init__()
@@ -130,6 +134,7 @@ class DecoderAttn(nn.Module):
             depth=attn_depth[0],
             heads=attn_heads,
             dim_head=attn_dim_head,
+            window_size=attn_window_size,
         )
 
         # Up
@@ -145,6 +150,7 @@ class DecoderAttn(nn.Module):
                             depth=attn_depth[ind],
                             heads=attn_heads,
                             dim_head=attn_dim_head,
+                            window_size=attn_window_size,
                         ),
                     ]
                 )
@@ -179,6 +185,7 @@ class VQVAE(nn.Module):
         attn_depth=(2, 2, 2, 4),
         attn_heads=8,
         attn_dim_head=64,
+        attn_window_size=1024,
         num_codebooks=8,
         vq_decay=0.9,
         rvq_quantize_dropout=True,
@@ -196,6 +203,7 @@ class VQVAE(nn.Module):
             attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
+            attn_window_size=attn_window_size,
         )
         self.encoder_norm = nn.LayerNorm(dim_h * dim_h_mult[-1])
 
@@ -206,6 +214,7 @@ class VQVAE(nn.Module):
             attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
+            attn_window_size=attn_window_size,
             use_tanh=use_tanh,
         )
         self.vq = ResidualVQ(
