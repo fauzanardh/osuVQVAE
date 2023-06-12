@@ -225,8 +225,14 @@ class VQVAE(nn.Module):
         discriminator_scales: Tuple[float] = (1.0, 0.5, 0.25),
         use_tanh: bool = False,
         use_hinge_loss: bool = False,
+        recon_loss_weight: float = 1.0,
+        gan_loss_weight: float = 1.0,
+        feature_loss_weight: float = 100.0,
     ) -> None:
         super().__init__()
+        self.recon_loss_weight = recon_loss_weight
+        self.gan_loss_weight = gan_loss_weight
+        self.feature_loss_weight = feature_loss_weight
 
         self.encoder = EncoderAttn(
             dim_in,
@@ -322,7 +328,7 @@ class VQVAE(nn.Module):
         # Discriminator
         if return_disc_loss:
             real, fake = orig_sig, recon_sig.detach()
-            disc_losses = []
+            disc_loss = 0.0
             for discriminator, downsample in zip(
                 self.discriminators,
                 self.discriminator_downsamples,
@@ -332,26 +338,23 @@ class VQVAE(nn.Module):
                     discriminator,
                     (real.requires_grad_(), fake),
                 )
-                disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
+                _disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
 
                 if add_gradient_penalty:
-                    disc_loss += gradient_penalty(real, disc_loss)
+                    _disc_loss += gradient_penalty(real, _disc_loss)
 
-                disc_losses.append(disc_loss)
-
-            # convert to tensor
-            disc_losses = torch.stack(disc_losses)
+                disc_loss += _disc_loss
 
             if return_recons:
-                return disc_losses.sum(), recon_sig
+                return disc_loss, recon_sig
             else:
-                return disc_losses.sum()
+                return disc_loss
 
         recon_loss = F.mse_loss(orig_sig, recon_sig)
 
         # Generator
         real, fake = orig_sig, recon_sig
-        gen_losses = []
+        gen_loss = 0.0
         disc_intermediates = []
         for discriminator, downsample in zip(
             self.discriminators,
@@ -366,25 +369,25 @@ class VQVAE(nn.Module):
                 (real_disc_intermediates, fake_disc_intermediates),
             )
 
-            gen_loss = self.gen_loss(fake_disc_logits)
-            gen_losses.append(gen_loss)
+            gen_loss += self.gen_loss(fake_disc_logits)
 
-        feature_losses = []
+        feature_loss = 0.0
         for real_disc_intermediates, fake_disc_intermediates in disc_intermediates:
-            losses = [
-                F.l1_loss(real_disc_intermediate, fake_disc_intermediate)
-                for real_disc_intermediate, fake_disc_intermediate in zip(
-                    real_disc_intermediates,
-                    fake_disc_intermediates,
+            for real_disc_intermediate, fake_disc_intermediate in zip(
+                real_disc_intermediates,
+                fake_disc_intermediates,
+            ):
+                feature_loss += F.l1_loss(
+                    real_disc_intermediate,
+                    fake_disc_intermediate,
                 )
-            ]
-            feature_losses.extend(losses)
 
-        # convert to tensor
-        gen_losses = torch.stack(gen_losses)
-        feature_losses = torch.stack(feature_losses)
-
-        loss = recon_loss + gen_losses.sum() + feature_losses.sum() + commit_loss.sum()
+        loss = (
+            recon_loss * self.recon_loss_weight
+            + gen_loss * self.gan_loss_weight
+            + feature_loss * self.feature_loss_weight
+            + commit_loss.sum()
+        )
         if return_recons:
             return loss, recon_sig
         else:
