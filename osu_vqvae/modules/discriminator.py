@@ -11,7 +11,7 @@ class Discriminator(nn.Module):
         self.layers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Conv1d(dim_in, dims_h[0], 7, padding=3),
+                    nn.Conv1d(dim_in, dims_h[0], 15, padding=7),
                     nn.LeakyReLU(0.1),
                 ),
             ],
@@ -20,16 +20,16 @@ class Discriminator(nn.Module):
         for _in_dim, _out_dim in dim_pairs:
             self.layers.append(
                 nn.Sequential(
-                    nn.Conv1d(_in_dim, _out_dim, 4, stride=2, padding=1),
+                    nn.Conv1d(_in_dim, _out_dim, 41, stride=4, padding=20),
                     nn.LeakyReLU(0.1),
                 ),
             )
 
         dim = dims_h[-1]
         self.to_logits = nn.Sequential(
-            nn.Conv1d(dim, dim, 1),
+            nn.Conv1d(dim, dim, 5, padding=2),
             nn.LeakyReLU(0.1),
-            nn.Conv1d(dim, 1, 4),
+            nn.Conv1d(dim, 1, 3, padding=1),
         )
 
     def forward(self: "Discriminator", x: torch.Tensor) -> torch.Tensor:
