@@ -23,7 +23,7 @@ class FeedForward(nn.Module):
         super().__init__()
         hidden_dim = int(dim * mult * 2 / 3)
         self.layers = nn.Sequential(
-            nn.LayerNorm(dim, eps=1e-3),
+            nn.LayerNorm(dim),
             nn.Linear(dim, hidden_dim * 2),
             GEGLU(),
             nn.Linear(hidden_dim, dim),
