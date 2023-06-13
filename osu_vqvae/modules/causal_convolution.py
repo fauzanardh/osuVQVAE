@@ -42,6 +42,7 @@ class CausalConvTranspose1d(nn.Module):
         stride: int = 1,
         **kwargs: Dict,
     ) -> None:
+        super().__init__()
         self.upsample_factor = stride
         self.padding = kernel_size - 1
         self.conv = nn.ConvTranspose1d(

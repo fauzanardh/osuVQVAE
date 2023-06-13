@@ -7,8 +7,9 @@ from torch import nn
 from torch.nn import functional as F
 from vector_quantize_pytorch import GroupedResidualVQ
 
-from osu_vqvae.modules.causal_convolution import CausalConv1d
+from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspose1d
 from osu_vqvae.modules.discriminator import MultiScaleDiscriminator
+from osu_vqvae.modules.residual import ResidualBlock
 from osu_vqvae.modules.scaler import DownsampleLinear, UpsampleLinear
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 
@@ -205,6 +206,203 @@ class DecoderAttn(nn.Module):
         return torch.tanh(x) if self.use_tanh else x
 
 
+class EncoderBlockV2(nn.Module):
+    def __init__(
+        self: "EncoderBlockV2",
+        dim_in: int,
+        dim_out: int,
+        stride: int,
+        dilations: Tuple[int] = (1, 3, 9),
+        squeeze_excite: bool = False,
+    ) -> None:
+        super().__init__()
+        self.layers = nn.Sequential(
+            ResidualBlock(
+                dim_in=dim_in,
+                dim_out=dim_in,
+                dilation=dilations[0],
+                squeeze_excite=squeeze_excite,
+            ),
+            ResidualBlock(
+                dim_in=dim_in,
+                dim_out=dim_in,
+                dilation=dilations[1],
+                squeeze_excite=squeeze_excite,
+            ),
+            ResidualBlock(
+                dim_in=dim_in,
+                dim_out=dim_in,
+                dilation=dilations[2],
+                squeeze_excite=squeeze_excite,
+            ),
+            CausalConv1d(dim_in, dim_out, stride * 2, stride=stride),
+        )
+
+    def forward(self: "EncoderBlockV2", x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
+
+
+class EncoderAttnV2(nn.Module):
+    def __init__(
+        self: "EncoderAttn",
+        dim_in: int,
+        dim_h: int,
+        dim_emb: int,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        strides: Tuple[int] = (2, 4, 8),
+        attn_depth: int = 2,
+        attn_heads: int = 8,
+        attn_dim_head: int = 64,
+        attn_window_size: int = 1024,
+        squeeze_excite: bool = False,
+    ) -> None:
+        super().__init__()
+        dims_h = [dim_h * mult for mult in dim_h_mult]
+        dims_h = tuple(dims_h)
+        in_out = list(zip(dims_h[:-1], dims_h[1:]))
+        num_layers = len(in_out)
+
+        # Down
+        down_blocks = []
+        for ind in range(num_layers):
+            layer_dim_in, layer_dim_out = in_out[ind]
+            stride = strides[ind]
+            down_blocks.append(
+                EncoderBlockV2(
+                    dim_in=layer_dim_in,
+                    dim_out=layer_dim_out,
+                    stride=stride,
+                    squeeze_excite=squeeze_excite,
+                ),
+            )
+
+        self.downs = nn.Sequential(
+            CausalConv1d(dim_in, dim_h, 7),
+            *down_blocks,
+            CausalConv1d(dims_h[-1], dim_emb, 3),
+        )
+        self.attn = LocalTransformerBlock(
+            dim=dim_emb,
+            depth=attn_depth,
+            heads=attn_heads,
+            dim_head=attn_dim_head,
+            window_size=attn_window_size,
+        )
+
+    def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
+        x = self.downs(x)
+
+        # Attention
+        # rearrange to (batch, length, channels)
+        x = rearrange(x, "b c l -> b l c")
+        x = self.attn(x)
+
+        return x
+
+
+class DecoderBlockV2(nn.Module):
+    def __init__(
+        self: "DecoderBlockV2",
+        dim_in: int,
+        dim_out: int,
+        stride: int,
+        dilations: Tuple[int] = (1, 3, 9),
+        squeeze_excite: bool = False,
+    ) -> None:
+        super().__init__()
+        # even_stride = stride % 2 == 0
+        # padding = (stride + (0 if even_stride else 1)) // 2
+        # output_padding = 0 if even_stride else 1
+
+        self.layers = nn.Sequential(
+            CausalConvTranspose1d(dim_in, dim_out, 2 * stride, stride=stride),
+            ResidualBlock(
+                dim_in=dim_out,
+                dim_out=dim_out,
+                dilation=dilations[0],
+                squeeze_excite=squeeze_excite,
+            ),
+            ResidualBlock(
+                dim_in=dim_out,
+                dim_out=dim_out,
+                dilation=dilations[1],
+                squeeze_excite=squeeze_excite,
+            ),
+            ResidualBlock(
+                dim_in=dim_out,
+                dim_out=dim_out,
+                dilation=dilations[2],
+                squeeze_excite=squeeze_excite,
+            ),
+        )
+
+    def forward(self: "DecoderBlockV2", x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
+
+
+class DecoderAttnV2(nn.Module):
+    def __init__(
+        self: "DecoderAttnV2",
+        dim_in: int,
+        dim_h: int,
+        dim_emb: int,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        strides: Tuple[int] = (2, 4, 8),
+        attn_depth: int = 2,
+        attn_heads: int = 8,
+        attn_dim_head: int = 64,
+        attn_window_size: int = 1024,
+        squeeze_excite: bool = False,
+        use_tanh: bool = False,
+    ) -> None:
+        super().__init__()
+        self.use_tanh = use_tanh
+
+        dim_h_mult = tuple(reversed((1, 2, 4, 8)))
+        dims_h = [dim_h * mult for mult in dim_h_mult]
+        dims_h = tuple(dims_h)
+        in_out = list(zip(dims_h[:-1], dims_h[1:]))
+        num_layers = len(in_out)
+
+        self.attn = LocalTransformerBlock(
+            dim=dim_emb,
+            depth=attn_depth,
+            heads=attn_heads,
+            dim_head=attn_dim_head,
+            window_size=attn_window_size,
+        )
+
+        # Up
+        up_blocks = []
+        for ind in range(num_layers):
+            layer_dim_in, layer_dim_out = in_out[ind]
+            stride = strides[ind]
+            up_blocks.append(
+                DecoderBlockV2(
+                    dim_in=layer_dim_in,
+                    dim_out=layer_dim_out,
+                    stride=stride,
+                    squeeze_excite=squeeze_excite,
+                ),
+            )
+
+        self.ups = nn.Sequential(
+            CausalConv1d(dim_emb, dims_h[0], 7),
+            *up_blocks,
+            CausalConv1d(dims_h[-1], dim_in, 7),
+        )
+
+    def forward(self: "DecoderAttnV2", x: torch.Tensor) -> torch.Tensor:
+        x = self.attn(x)
+
+        # Up
+        # rearrange to (batch, channels, length)
+        x = rearrange(x, "b l c -> b c l")
+        x = self.ups(x)
+
+        return torch.tanh(x) if self.use_tanh else x
+
+
 class VQVAE(nn.Module):
     def __init__(
         self: "VQVAE",
@@ -213,7 +411,8 @@ class VQVAE(nn.Module):
         dim_emb: int,
         n_emb: int,
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
-        attn_depth: Tuple[int] = (2, 2, 2, 4),
+        strides: Tuple[int] = (2, 4, 8),
+        attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 1024,
@@ -235,23 +434,24 @@ class VQVAE(nn.Module):
         self.gan_loss_weight = gan_loss_weight
         self.feature_loss_weight = feature_loss_weight
 
-        self.encoder = EncoderAttn(
-            dim_in,
-            dim_h,
-            dim_emb,
+        self.encoder = EncoderAttnV2(
+            dim_in=dim_in,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
             dim_h_mult=dim_h_mult,
+            strides=strides,
             attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
         )
-        self.encoder_norm = nn.LayerNorm(dim_emb, eps=1e-3)
 
-        self.decoder = DecoderAttn(
-            dim_in,
-            dim_h,
-            dim_emb,
+        self.decoder = DecoderAttnV2(
+            dim_in=dim_in,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
             dim_h_mult=dim_h_mult,
+            strides=strides,
             attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
@@ -299,7 +499,6 @@ class VQVAE(nn.Module):
 
     def encode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
-        x = self.encoder_norm(x)
         return self.vq(x)
 
     def decode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
