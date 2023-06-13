@@ -44,7 +44,6 @@ class MultiScaleDiscriminator(nn.Module):
         self: "MultiScaleDiscriminator",
         dim_in: int,
         dim_h: int = 16,
-        layers: int = 4,
         groups: Tuple[int] = (4, 16, 64, 256),
         max_dim: int = 1024,
     ) -> None:
@@ -53,7 +52,7 @@ class MultiScaleDiscriminator(nn.Module):
         self.conv_layers = nn.ModuleList([])
 
         cur_dim = dim_h
-        for _, group in zip(range(layers), groups):
+        for group in groups:
             out_dim = min(cur_dim * 4, max_dim)
             self.conv_layers.append(
                 nn.Sequential(
