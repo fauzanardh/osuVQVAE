@@ -245,7 +245,7 @@ class VQVAE(nn.Module):
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
         )
-        self.encoder_norm = nn.LayerNorm(dim_emb)
+        self.encoder_norm = nn.LayerNorm(dim_emb, eps=1e-3)
 
         self.decoder = DecoderAttn(
             dim_in,

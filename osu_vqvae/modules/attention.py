@@ -11,7 +11,7 @@ class RMSNorm(nn.Module):
         self.gamma = nn.Parameter(torch.ones(dim))
 
     def forward(self: "RMSNorm", x: torch.Tensor) -> torch.Tensor:
-        normed = F.normalize(x, dim=-1)
+        normed = F.normalize(x, dim=-1, eps=1e-3)
         return normed * self.scale * self.gamma
 
 
@@ -75,13 +75,15 @@ class CrossAttention(nn.Module):
 
         inner_dim = dim_head * heads
 
-        self.norm = nn.LayerNorm(dim)
-        self.norm_context = nn.LayerNorm(context_dim) if norm_context else nn.Identity()
+        self.norm = nn.LayerNorm(dim, eps=1e-3)
+        self.norm_context = (
+            nn.LayerNorm(context_dim, eps=1e-3) if norm_context else nn.Identity()
+        )
         self.to_q = nn.Linear(dim, inner_dim, bias=False)
         self.to_kv = nn.Linear(context_dim, inner_dim * 2, bias=False)
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, dim, bias=False),
-            nn.LayerNorm(dim),
+            nn.LayerNorm(dim, eps=1e-3),
         )
 
     def forward(
