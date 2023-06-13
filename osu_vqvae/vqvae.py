@@ -528,7 +528,7 @@ class VQVAE(nn.Module):
         # Discriminator
         if return_disc_loss:
             real, fake = orig_sig, recon_sig.detach()
-            disc_loss = 0.0
+            disc_losses = []
             for discriminator, downsample in zip(
                 self.discriminators,
                 self.discriminator_downsamples,
@@ -538,23 +538,24 @@ class VQVAE(nn.Module):
                     discriminator,
                     (real.requires_grad_(), fake),
                 )
-                _disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
+                disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
 
                 if add_gradient_penalty:
-                    _disc_loss += gradient_penalty(real, _disc_loss)
+                    disc_loss += gradient_penalty(real, disc_loss)
 
-                disc_loss += _disc_loss
+                disc_losses.append(disc_loss)
 
             if return_recons:
-                return disc_loss, recon_sig
+                return torch.stack(disc_losses).mean(), recon_sig
             else:
-                return disc_loss
+                return torch.stack(disc_losses).mean()
 
+        # Recon loss
         recon_loss = F.mse_loss(orig_sig, recon_sig)
 
         # Generator
         real, fake = orig_sig, recon_sig
-        gen_loss = 0.0
+        gan_losses = []
         disc_intermediates = []
         for discriminator, downsample in zip(
             self.discriminators,
@@ -565,26 +566,29 @@ class VQVAE(nn.Module):
                 fake_disc_logits,
                 fake_disc_intermediates,
             ) = map(partial(discriminator, return_intermediates=True), (real, fake))
+
             disc_intermediates.append(
                 (real_disc_intermediates, fake_disc_intermediates),
             )
+            gan_losses.append(self.gen_loss(fake_disc_logits))
+        gan_loss = torch.stack(gan_losses).mean()
 
-            gen_loss += self.gen_loss(fake_disc_logits)
-
-        feature_loss = 0.0
+        # Features
+        feature_losses = []
         for real_disc_intermediates, fake_disc_intermediates in disc_intermediates:
-            for real_disc_intermediate, fake_disc_intermediate in zip(
-                real_disc_intermediates,
-                fake_disc_intermediates,
-            ):
-                feature_loss += F.l1_loss(
-                    real_disc_intermediate,
-                    fake_disc_intermediate,
+            losses = [
+                F.l1_loss(real_disc_intermediate, fake_disc_intermediate)
+                for real_disc_intermediate, fake_disc_intermediate in zip(
+                    real_disc_intermediates,
+                    fake_disc_intermediates,
                 )
+            ]
+            feature_losses.extend(losses)
+        feature_loss = torch.stack(feature_losses).mean()
 
         loss = (
             recon_loss * self.recon_loss_weight
-            + gen_loss * self.gan_loss_weight
+            + gan_loss * self.gan_loss_weight
             + feature_loss * self.feature_loss_weight
             + commit_loss.sum()
         )
