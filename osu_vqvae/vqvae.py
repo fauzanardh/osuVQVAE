@@ -13,7 +13,8 @@ from osu_vqvae.modules.scaler import DownsampleLinear, UpsampleLinear
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 
 
-def log(t: torch.Tensor, eps: int = 1e-10) -> torch.Tensor:
+def log(t: torch.Tensor) -> torch.Tensor:
+    eps = torch.finfo(t.dtype).eps
     return torch.log(t + eps)
 
 
