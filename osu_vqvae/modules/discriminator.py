@@ -11,7 +11,7 @@ class Discriminator(nn.Module):
         self.layers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Conv1d(dim_in, dims_h[0], 7, padding=3),
+                    nn.Conv1d(dim_in, dims_h[0], 15, padding=7),
                     nn.LeakyReLU(0.1),
                 ),
             ],
@@ -20,14 +20,14 @@ class Discriminator(nn.Module):
         for _in_dim, _out_dim in dim_pairs:
             self.layers.append(
                 nn.Sequential(
-                    nn.Conv1d(_in_dim, _out_dim, 4, stride=2, padding=1),
+                    nn.Conv1d(_in_dim, _out_dim, 41, stride=4, padding=20),
                     nn.LeakyReLU(0.1),
                 ),
             )
 
         dim = dims_h[-1]
         self.to_logits = nn.Sequential(
-            nn.Conv1d(dim, dim, 1),
+            nn.Conv1d(dim, dim, 5, padding=2),
             nn.LeakyReLU(0.1),
             nn.Conv1d(dim, 1, 3, padding=1),
         )
@@ -48,7 +48,7 @@ class MultiScaleDiscriminator(nn.Module):
         max_dim: int = 1024,
     ) -> None:
         super().__init__()
-        self.init_conv = nn.Conv1d(dim_in, dim_h, 7, padding=3)
+        self.init_conv = nn.Conv1d(dim_in, dim_h, 15, padding=7)
         self.conv_layers = nn.ModuleList([])
 
         cur_dim = dim_h
@@ -56,14 +56,14 @@ class MultiScaleDiscriminator(nn.Module):
             out_dim = min(cur_dim * 4, max_dim)
             self.conv_layers.append(
                 nn.Sequential(
-                    nn.Conv1d(cur_dim, out_dim, 4, stride=2, padding=1, groups=group),
+                    nn.Conv1d(cur_dim, out_dim, 41, stride=4, padding=20, groups=group),
                     nn.LeakyReLU(0.1),
                 ),
             )
             cur_dim = out_dim
 
         self.to_logits = nn.Sequential(
-            nn.Conv1d(cur_dim, cur_dim, 1),
+            nn.Conv1d(cur_dim, cur_dim, 5, padding=2),
             nn.LeakyReLU(0.1),
             nn.Conv1d(cur_dim, 1, 3, padding=1),
         )
