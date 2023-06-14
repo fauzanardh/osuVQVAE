@@ -86,8 +86,8 @@ class EncoderAttn(nn.Module):
         dim_in: int,
         dim_h: int,
         dim_emb: int,
-        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
-        strides: Tuple[int] = (2, 4, 8),
+        dim_h_mult: Tuple[int] = (2, 4, 8, 16),
+        strides: Tuple[int] = (2, 4, 4, 8),
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
@@ -96,9 +96,9 @@ class EncoderAttn(nn.Module):
         squeeze_excite: bool = False,
     ) -> None:
         super().__init__()
-        dims_h = [dim_h * mult for mult in dim_h_mult]
-        dims_h = tuple(dims_h)
-        in_out = list(zip(dims_h[:-1], dims_h[1:]))
+        dims_h = tuple((dim_h * m for m in dim_h_mult))
+        dims_h = (dim_h, *dims_h)
+        in_out = tuple(zip(dims_h[:-1], dims_h[1:]))
         num_layers = len(in_out)
 
         # Down
@@ -186,8 +186,8 @@ class DecoderAttn(nn.Module):
         dim_in: int,
         dim_h: int,
         dim_emb: int,
-        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
-        strides: Tuple[int] = (2, 4, 8),
+        dim_h_mult: Tuple[int] = (2, 4, 8, 16),
+        strides: Tuple[int] = (2, 4, 4, 8),
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
@@ -199,10 +199,11 @@ class DecoderAttn(nn.Module):
         super().__init__()
         self.use_tanh = use_tanh
 
-        dim_h_mult = tuple(reversed((1, 2, 4, 8)))
-        dims_h = [dim_h * mult for mult in dim_h_mult]
-        dims_h = tuple(dims_h)
-        in_out = list(zip(dims_h[:-1], dims_h[1:]))
+        dims_h = tuple((dim_h * m for m in dim_h_mult))
+        dims_h = (dim_h, *dims_h)
+        strides = tuple(reversed(strides))
+        in_out = reversed(tuple(zip(dims_h[:-1], dims_h[1:])))
+        in_out = tuple(in_out)
         num_layers = len(in_out)
 
         self.attn = LocalTransformerBlock(
@@ -217,7 +218,7 @@ class DecoderAttn(nn.Module):
         # Up
         up_blocks = []
         for ind in range(num_layers):
-            layer_dim_in, layer_dim_out = in_out[ind]
+            layer_dim_out, layer_dim_in = in_out[ind]
             stride = strides[ind]
             up_blocks.append(
                 DecoderBlock(
@@ -229,9 +230,9 @@ class DecoderAttn(nn.Module):
             )
 
         self.ups = nn.Sequential(
-            CausalConv1d(dim_emb, dims_h[0], 7),
+            CausalConv1d(dim_emb, dims_h[-1], 7),
             *up_blocks,
-            CausalConv1d(dims_h[-1], dim_in, 7),
+            CausalConv1d(dim_h, dim_in, 7),
         )
 
     def forward(self: "DecoderAttn", x: torch.Tensor) -> torch.Tensor:
@@ -252,8 +253,8 @@ class VQVAE(nn.Module):
         dim_h: int,
         dim_emb: int,
         n_emb: int,
-        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
-        strides: Tuple[int] = (2, 4, 8),
+        dim_h_mult: Tuple[int] = (2, 4, 8, 16),
+        strides: Tuple[int] = (2, 4, 4, 8),
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
