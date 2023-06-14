@@ -36,6 +36,14 @@ def gradient_penalty(
     return weight * ((gradients.norm(2, dim=-1) - 1) ** 2).mean()
 
 
+def bce_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
+    return (-log(1 - torch.sigmoid(fake)) - log(torch.sigmoid(real))).mean()
+
+
+def bce_generator_loss(fake: torch.Tensor) -> torch.Tensor:
+    return -log(torch.sigmoid(fake)).mean()
+
+
 def hinge_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
     return (F.relu(1 + fake) + F.relu(1 - real)).mean()
 
@@ -268,6 +276,7 @@ class VQVAE(nn.Module):
         vq_stochastic_sample_codes: bool = False,
         discriminator_layers: int = 4,
         use_tanh: bool = False,
+        use_hinge_loss: bool = False,
         recon_loss_weight: float = 1.0,
         gan_loss_weight: float = 1.0,
         feature_loss_weight: float = 100.0,
@@ -323,8 +332,10 @@ class VQVAE(nn.Module):
         layer_dims = [dim_h * mult for mult in layer_mults]
         self.discriminator = Discriminator(dim_in=dim_in, h_dims=layer_dims)
 
-        self.gen_loss = hinge_generator_loss
-        self.disc_loss = hinge_discriminator_loss
+        self.gen_loss = hinge_generator_loss if use_hinge_loss else bce_generator_loss
+        self.disc_loss = (
+            hinge_discriminator_loss if use_hinge_loss else bce_discriminator_loss
+        )
 
     def encode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
