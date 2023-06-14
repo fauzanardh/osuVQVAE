@@ -5,13 +5,13 @@ from torch import nn
 
 
 class Discriminator(nn.Module):
-    def __init__(self: "Discriminator", dim_in: int, dims_h: Tuple[int]) -> None:
+    def __init__(self: "Discriminator", dim_in: int, h_dims: Tuple[int]) -> None:
         super().__init__()
-        dim_pairs = list(zip(dims_h[:-1], dims_h[1:]))
+        dim_pairs = list(zip(h_dims[:-1], h_dims[1:]))
         self.layers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Conv1d(dim_in, dims_h[0], 15, padding=7),
+                    nn.Conv1d(dim_in, h_dims[0], 15, padding=7),
                     nn.LeakyReLU(0.1),
                 ),
             ],
@@ -25,18 +25,26 @@ class Discriminator(nn.Module):
                 ),
             )
 
-        dim = dims_h[-1]
+        dim = h_dims[-1]
         self.to_logits = nn.Sequential(
             nn.Conv1d(dim, dim, 5, padding=2),
             nn.LeakyReLU(0.1),
             nn.Conv1d(dim, 1, 3, padding=1),
         )
 
-    def forward(self: "Discriminator", x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self: "Discriminator", x: torch.Tensor, return_intermediates: bool = False
+    ) -> torch.Tensor:
+        intermediates = []
         for layer in self.layers:
             x = layer(x)
+            intermediates.append(x)
 
-        return self.to_logits(x)
+        out = self.to_logits(x)
+        if not return_intermediates:
+            return out
+        else:
+            return out, intermediates
 
 
 class MultiScaleDiscriminator(nn.Module):

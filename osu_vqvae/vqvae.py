@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from vector_quantize_pytorch import GroupedResidualVQ
 
 from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspose1d
-from osu_vqvae.modules.discriminator import MultiScaleDiscriminator
+from osu_vqvae.modules.discriminator import Discriminator
 from osu_vqvae.modules.residual import ResidualBlock
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 
@@ -266,7 +266,7 @@ class VQVAE(nn.Module):
         vq_commitment_weight: float = 1.0,
         vq_quantize_dropout_cutoff_index: int = 1,
         vq_stochastic_sample_codes: bool = False,
-        discriminator_scales: Tuple[float] = (1.0, 0.5, 0.25),
+        discriminator_layers: int = 4,
         use_tanh: bool = False,
         recon_loss_weight: float = 1.0,
         gan_loss_weight: float = 1.0,
@@ -319,23 +319,9 @@ class VQVAE(nn.Module):
         )
 
         # Discriminator
-        self.discriminators = nn.ModuleList(
-            [
-                MultiScaleDiscriminator(dim_in=dim_in)
-                for _ in range(len(discriminator_scales))
-            ],
-        )
-        disc_relative_factors = [
-            int(s1 / s2)
-            for s1, s2 in zip(discriminator_scales[:-1], discriminator_scales[1:])
-        ]
-        self.discriminator_downsamples = nn.ModuleList(
-            [nn.Identity()]
-            + [
-                nn.AvgPool1d(2 * factor, stride=factor, padding=factor)
-                for factor in disc_relative_factors
-            ],
-        )
+        layer_mults = [2**i for i in range(discriminator_layers)]
+        layer_dims = [dim_h * mult for mult in layer_mults]
+        self.discriminator = Discriminator(dim_in=dim_in, h_dims=layer_dims)
 
         self.gen_loss = hinge_generator_loss
         self.disc_loss = hinge_discriminator_loss
@@ -360,61 +346,45 @@ class VQVAE(nn.Module):
         return_recons: float = True,
         add_gradient_penalty: float = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        orig_sig = sig.clone()
-
-        sig, _, commit_loss = self.encode(sig)
-        recon_sig = self.decode(sig)
+        quantized, _, commit_loss = self.encode(sig)
+        recon_sig = self.decode(quantized)
 
         if not (return_loss or return_disc_loss):
             return recon_sig
 
         # Discriminator
         if return_disc_loss:
-            real, fake = orig_sig, recon_sig.detach()
-            disc_losses = []
-            for discriminator, downsample in zip(
-                self.discriminators,
-                self.discriminator_downsamples,
-            ):
-                real, fake = map(downsample, (real, fake))
-                real_disc_logits, fake_disc_logits = map(
-                    discriminator,
-                    (real.requires_grad_(), fake),
-                )
-                disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
+            recon_sig.detach_()
+            sig.requires_grad_()
 
-                if add_gradient_penalty:
-                    disc_loss += gradient_penalty(real, disc_loss)
+            real_disc_logits, fake_disc_logits = map(
+                self.discriminator,
+                (sig, recon_sig),
+            )
+            loss = self.disc_loss(real_disc_logits, fake_disc_logits)
 
-                disc_losses.append(disc_loss)
+            if add_gradient_penalty:
+                loss += gradient_penalty(sig, real_disc_logits)
 
             if return_recons:
-                return torch.stack(disc_losses).mean(), recon_sig
+                return loss, recon_sig
             else:
-                return torch.stack(disc_losses).mean()
+                return loss
 
         # Recon loss
-        recon_loss = F.mse_loss(orig_sig, recon_sig)
+        recon_loss = F.mse_loss(sig, recon_sig)
 
         # Generator
-        real, fake = orig_sig, recon_sig
-        gan_losses = []
         disc_intermediates = []
-        for discriminator, downsample in zip(
-            self.discriminators,
-            self.discriminator_downsamples,
-        ):
-            real, fake = map(downsample, (real, fake))
-            (real_disc_logits, real_disc_intermediates), (
-                fake_disc_logits,
-                fake_disc_intermediates,
-            ) = map(partial(discriminator, return_intermediates=True), (real, fake))
-
-            disc_intermediates.append(
-                (real_disc_intermediates, fake_disc_intermediates),
-            )
-            gan_losses.append(self.gen_loss(fake_disc_logits))
-        gan_loss = torch.stack(gan_losses).mean()
+        (real_disc_logits, real_disc_intermediates), (
+            fake_disc_logits,
+            fake_disc_intermediates,
+        ) = map(
+            partial(self.discriminator, return_intermediates=True),
+            (sig, recon_sig),
+        )
+        disc_intermediates.append((real_disc_intermediates, fake_disc_intermediates))
+        gan_loss = self.gen_loss(fake_disc_logits)
 
         # Features
         feature_losses = []
