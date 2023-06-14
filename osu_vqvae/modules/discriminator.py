@@ -5,19 +5,26 @@ from torch import nn
 
 
 class Discriminator(nn.Module):
-    def __init__(self: "Discriminator", dim_in: int, dims_h: Tuple[int]) -> None:
+    def __init__(
+        self: "Discriminator",
+        dim_in: int,
+        dim_h: int,
+        dim_h_mult: Tuple[int],
+    ) -> None:
         super().__init__()
-        dim_pairs = list(zip(dims_h[:-1], dims_h[1:]))
+        dims_h = tuple((dim_h * m for m in dim_h_mult))
+        dims_h = (dim_h, *dims_h)
+        in_out = tuple(zip(dims_h[:-1], dims_h[1:]))
         self.layers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Conv1d(dim_in, dims_h[0], 15, padding=7),
+                    nn.Conv1d(dim_in, dim_h, 15, padding=7),
                     nn.LeakyReLU(0.1),
                 ),
             ],
         )
 
-        for _in_dim, _out_dim in dim_pairs:
+        for _in_dim, _out_dim in in_out:
             self.layers.append(
                 nn.Sequential(
                     nn.Conv1d(_in_dim, _out_dim, 41, stride=4, padding=20),
@@ -32,11 +39,21 @@ class Discriminator(nn.Module):
             nn.Conv1d(dim, 1, 3, padding=1),
         )
 
-    def forward(self: "Discriminator", x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self: "Discriminator",
+        x: torch.Tensor,
+        return_intermediates: bool = False,
+    ) -> torch.Tensor:
+        intermediates = []
         for layer in self.layers:
             x = layer(x)
+            intermediates.append(x)
 
-        return self.to_logits(x)
+        out = self.to_logits(x)
+        if not return_intermediates:
+            return out
+
+        return out, intermediates
 
 
 class MultiScaleDiscriminator(nn.Module):

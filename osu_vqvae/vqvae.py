@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from vector_quantize_pytorch import GroupedResidualVQ
 
 from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspose1d
-from osu_vqvae.modules.discriminator import MultiScaleDiscriminator
+from osu_vqvae.modules.discriminator import Discriminator
 from osu_vqvae.modules.residual import ResidualBlock
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 
@@ -319,22 +319,27 @@ class VQVAE(nn.Module):
         )
 
         # Discriminator
-        self.discriminators = nn.ModuleList(
-            [
-                MultiScaleDiscriminator(dim_in=dim_in)
-                for _ in range(len(discriminator_scales))
-            ],
-        )
-        disc_relative_factors = [
-            int(s1 / s2)
-            for s1, s2 in zip(discriminator_scales[:-1], discriminator_scales[1:])
-        ]
-        self.discriminator_downsamples = nn.ModuleList(
-            [nn.Identity()]
-            + [
-                nn.AvgPool1d(2 * factor, stride=factor, padding=factor)
-                for factor in disc_relative_factors
-            ],
+        # self.discriminators = nn.ModuleList(
+        #     [
+        #         MultiScaleDiscriminator(dim_in=dim_in)
+        #         for _ in range(len(discriminator_scales))
+        #     ],
+        # )
+        # disc_relative_factors = [
+        #     int(s1 / s2)
+        #     for s1, s2 in zip(discriminator_scales[:-1], discriminator_scales[1:])
+        # ]
+        # self.discriminator_downsamples = nn.ModuleList(
+        #     [nn.Identity()]
+        #     + [
+        #         nn.AvgPool1d(2 * factor, stride=factor, padding=factor)
+        #         for factor in disc_relative_factors
+        #     ],
+        # )
+        self.discriminator = Discriminator(
+            dim_in=dim_in,
+            dim_h=dim_h,
+            dim_h_mult=dim_h_mult,
         )
 
         self.gen_loss = hinge_generator_loss
@@ -371,62 +376,84 @@ class VQVAE(nn.Module):
         # Discriminator
         if return_disc_loss:
             real, fake = orig_sig, recon_sig.detach()
-            disc_losses = []
-            for discriminator, downsample in zip(
-                self.discriminators,
-                self.discriminator_downsamples,
-            ):
-                real, fake = map(downsample, (real, fake))
-                real_disc_logits, fake_disc_logits = map(
-                    discriminator,
-                    (real.requires_grad_(), fake),
-                )
-                disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
+            # disc_losses = []
+            # for discriminator, downsample in zip(
+            #     self.discriminators,
+            #     self.discriminator_downsamples,
+            # ):
+            #     real, fake = map(downsample, (real, fake))
+            #     real_disc_logits, fake_disc_logits = map(
+            #         discriminator,
+            #         (real.requires_grad_(), fake),
+            #     )
+            #     disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
 
-                if add_gradient_penalty:
-                    disc_loss += gradient_penalty(real, disc_loss)
+            #     if add_gradient_penalty:
+            #         disc_loss += gradient_penalty(real, disc_loss)
 
-                disc_losses.append(disc_loss)
+            #     disc_losses.append(disc_loss)
+            real_disc_logits, fake_disc_logits = map(
+                self.discriminator,
+                (real.requires_grad_(), fake),
+            )
+            disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
+            if add_gradient_penalty:
+                disc_loss += gradient_penalty(real, disc_loss)
 
             if return_recons:
-                return torch.stack(disc_losses).mean(), recon_sig
+                return disc_loss, recon_sig
             else:
-                return torch.stack(disc_losses).mean()
+                return disc_loss
 
         # Recon loss
         recon_loss = F.mse_loss(orig_sig, recon_sig)
 
         # Generator
         real, fake = orig_sig, recon_sig
-        gan_losses = []
-        disc_intermediates = []
-        for discriminator, downsample in zip(
-            self.discriminators,
-            self.discriminator_downsamples,
-        ):
-            real, fake = map(downsample, (real, fake))
-            (real_disc_logits, real_disc_intermediates), (
-                fake_disc_logits,
-                fake_disc_intermediates,
-            ) = map(partial(discriminator, return_intermediates=True), (real, fake))
+        # gan_losses = []
+        # disc_intermediates = []
+        # for discriminator, downsample in zip(
+        #     self.discriminators,
+        #     self.discriminator_downsamples,
+        # ):
+        #     real, fake = map(downsample, (real, fake))
+        #     (real_disc_logits, real_disc_intermediates), (
+        #         fake_disc_logits,
+        #         fake_disc_intermediates,
+        #     ) = map(partial(discriminator, return_intermediates=True), (real, fake))
 
-            disc_intermediates.append(
-                (real_disc_intermediates, fake_disc_intermediates),
-            )
-            gan_losses.append(self.gen_loss(fake_disc_logits))
-        gan_loss = torch.stack(gan_losses).mean()
+        #     disc_intermediates.append(
+        #         (real_disc_intermediates, fake_disc_intermediates),
+        #     )
+        #     gan_losses.append(self.gen_loss(fake_disc_logits))
+        # gan_loss = torch.stack(gan_losses).mean()
+        (
+            real_disc_logits,
+            real_disc_intermediates,
+        ), (
+            fake_disc_logits,
+            fake_disc_intermediates,
+        ) = map(partial(self.discriminator, return_intermediates=True), (real, fake))
+        gan_loss = self.gen_loss(fake_disc_logits)
 
         # Features
-        feature_losses = []
-        for real_disc_intermediates, fake_disc_intermediates in disc_intermediates:
-            losses = [
-                F.l1_loss(real_disc_intermediate, fake_disc_intermediate)
-                for real_disc_intermediate, fake_disc_intermediate in zip(
-                    real_disc_intermediates,
-                    fake_disc_intermediates,
-                )
-            ]
-            feature_losses.extend(losses)
+        # feature_losses = []
+        # for real_disc_intermediates, fake_disc_intermediates in disc_intermediates:
+        #     losses = [
+        #         F.l1_loss(real_disc_intermediate, fake_disc_intermediate)
+        #         for real_disc_intermediate, fake_disc_intermediate in zip(
+        #             real_disc_intermediates,
+        #             fake_disc_intermediates,
+        #         )
+        #     ]
+        #     feature_losses.extend(losses)
+        feature_losses = [
+            F.l1_loss(real_disc_intermediate, fake_disc_intermediate)
+            for real_disc_intermediate, fake_disc_intermediate in zip(
+                real_disc_intermediates,
+                fake_disc_intermediates,
+            )
+        ]
         feature_loss = torch.stack(feature_losses).mean()
 
         loss = (
