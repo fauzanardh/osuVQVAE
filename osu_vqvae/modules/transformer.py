@@ -1,5 +1,5 @@
 import torch
-from local_attention import LocalMHA
+from local_attention import DynamicPositionBias, LocalMHA
 from torch import nn
 from torch.nn import functional as F
 
@@ -55,8 +55,8 @@ class TransformerBlock(nn.Module):
 
     def forward(self: "TransformerBlock", x: torch.Tensor) -> torch.Tensor:
         for attn, ff in self.layers:
-            x = attn(shift_token(x)) + x
-            x = ff(shift_token(x)) + x
+            x = attn(x) + x
+            x = ff(x) + x
         return x
 
 
@@ -68,8 +68,18 @@ class LocalTransformerBlock(nn.Module):
         heads: int = 8,
         dim_head: int = 64,
         window_size: int = 512,
+        dynamic_pos_bias: bool = False,
     ) -> None:
         super().__init__()
+        self.ws = window_size
+        self.dynamic_pos_bias = None
+
+        if dynamic_pos_bias:
+            self.dynamic_pos_bias = DynamicPositionBias(
+                dim=dim // 2,
+                heads=heads,
+            )
+
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(
@@ -81,8 +91,9 @@ class LocalTransformerBlock(nn.Module):
                             dim_head=dim_head,
                             qk_rmsnorm=True,
                             window_size=window_size,
-                            use_rotary_pos_emb=True,
+                            use_rotary_pos_emb=not dynamic_pos_bias,
                             use_xpos=True,
+                            prenorm=True,
                             causal=True,
                         ),
                         FeedForward(dim),
@@ -91,7 +102,11 @@ class LocalTransformerBlock(nn.Module):
             )
 
     def forward(self: "LocalTransformerBlock", x: torch.Tensor) -> torch.Tensor:
+        attn_bias = None
+        if self.dynamic_pos_bias is not None:
+            attn_bias = self.dynamic_pos_bias(self.ws, self.ws * 2)
+
         for attn, ff in self.layers:
-            x = attn(shift_token(x)) + x
-            x = ff(shift_token(x)) + x
+            x = attn(x, attn_bias=attn_bias) + x
+            x = ff(x) + x
         return x

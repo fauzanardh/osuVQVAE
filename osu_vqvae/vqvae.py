@@ -10,7 +10,6 @@ from vector_quantize_pytorch import GroupedResidualVQ
 from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspose1d
 from osu_vqvae.modules.discriminator import MultiScaleDiscriminator
 from osu_vqvae.modules.residual import ResidualBlock
-from osu_vqvae.modules.scaler import DownsampleLinear, UpsampleLinear
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 
 
@@ -37,14 +36,6 @@ def gradient_penalty(
     return weight * ((gradients.norm(2, dim=-1) - 1) ** 2).mean()
 
 
-def bce_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
-    return (-log(1 - torch.sigmoid(fake)) - log(torch.sigmoid(real))).mean()
-
-
-def bce_generator_loss(fake: torch.Tensor) -> torch.Tensor:
-    return -log(torch.sigmoid(fake)).mean()
-
-
 def hinge_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
     return (F.relu(1 + fake) + F.relu(1 - real)).mean()
 
@@ -53,162 +44,9 @@ def hinge_generator_loss(fake: torch.Tensor) -> torch.Tensor:
     return -fake.mean()
 
 
-class EncoderAttn(nn.Module):
+class EncoderBlock(nn.Module):
     def __init__(
-        self: "EncoderAttn",
-        dim_in: int,
-        dim_h: int,
-        dim_emb: int,
-        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
-        attn_depth: Tuple[int] = (2, 2, 2, 4),
-        attn_heads: int = 8,
-        attn_dim_head: int = 64,
-        attn_window_size: int = 1024,
-    ) -> None:
-        super().__init__()
-        self.init_conv = CausalConv1d(dim_in, dim_h, 7)
-
-        dims_h = [dim_h * mult for mult in dim_h_mult]
-        in_out = list(zip(dims_h[:-1], dims_h[1:]))
-        num_layers = len(in_out)
-
-        # Down
-        self.downs = nn.ModuleList([])
-        for ind in range(num_layers):
-            layer_dim_in, layer_dim_out = in_out[ind]
-            self.downs.append(
-                nn.ModuleList(
-                    [
-                        DownsampleLinear(layer_dim_in, layer_dim_out),
-                        LocalTransformerBlock(
-                            dim=layer_dim_out,
-                            depth=attn_depth[ind],
-                            heads=attn_heads,
-                            dim_head=attn_dim_head,
-                            window_size=attn_window_size,
-                        ),
-                    ],
-                ),
-            )
-
-        # Middle
-        dim_mid = dims_h[-1]
-        self.mid_attn = LocalTransformerBlock(
-            dim=dim_mid,
-            depth=attn_depth[0],
-            heads=attn_heads,
-            dim_head=attn_dim_head,
-            window_size=attn_window_size,
-        )
-
-        # Project to embedding space
-        self.proj = CausalConv1d(dim_mid, dim_emb, 3)
-
-    def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
-        x = self.init_conv(x)
-        x = rearrange(x, "b c l -> b l c")
-
-        # Down
-        for downsample, attn_block in self.downs:
-            x = downsample(x)
-            x = attn_block(x)
-
-        # Middle
-        x = self.mid_attn(x)
-
-        # Project to embedding space
-        # annoyingly, conv1d expects (batch, channels, length)
-        # while the rest of the model expects (batch, length, channels)
-        x = rearrange(x, "b l c -> b c l")
-        x = self.proj(x)
-        x = rearrange(x, "b c l -> b l c")
-
-        return x
-
-
-class DecoderAttn(nn.Module):
-    def __init__(
-        self: "DecoderAttn",
-        dim_in: int,
-        dim_h: int,
-        dim_emb: int,
-        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
-        attn_depth: Tuple[int] = (2, 2, 2, 4),
-        attn_heads: int = 8,
-        attn_dim_head: int = 64,
-        attn_window_size: int = 1024,
-        use_tanh: bool = False,
-    ) -> None:
-        super().__init__()
-        self.use_tanh = use_tanh
-
-        dim_h_mult = tuple(reversed(dim_h_mult))
-        attn_depth = tuple(reversed(attn_depth))
-        dims_h = [dim_h * mult for mult in dim_h_mult]
-        in_out = list(zip(dims_h[:-1], dims_h[1:]))
-        num_layers = len(in_out)
-        dim_mid = dims_h[0]
-
-        # Project from embedding space
-        self.proj = CausalConv1d(dim_emb, dim_mid, 7)
-
-        # Middle
-        self.mid_attn = LocalTransformerBlock(
-            dim=dim_mid,
-            depth=attn_depth[0],
-            heads=attn_heads,
-            dim_head=attn_dim_head,
-            window_size=attn_window_size,
-        )
-
-        # Up
-        self.ups = nn.ModuleList([])
-        for ind in range(num_layers):
-            layer_dim_in, layer_dim_out = in_out[ind]
-            self.ups.append(
-                nn.ModuleList(
-                    [
-                        UpsampleLinear(layer_dim_in, layer_dim_out),
-                        LocalTransformerBlock(
-                            dim=layer_dim_out,
-                            depth=attn_depth[ind],
-                            heads=attn_heads,
-                            dim_head=attn_dim_head,
-                            window_size=attn_window_size,
-                        ),
-                    ],
-                ),
-            )
-
-        # End
-        self.end_conv = CausalConv1d(dim_h, dim_in, 7)
-
-    def forward(self: "DecoderAttn", x: torch.Tensor) -> torch.Tensor:
-        # Project from embedding space
-        # annoyingly, conv1d expects (batch, channels, length)
-        # while the rest of the model expects (batch, length, channels)
-        x = rearrange(x, "b l c -> b c l")
-        x = self.proj(x)
-        x = rearrange(x, "b c l -> b l c")
-
-        # Middle
-        x = self.mid_attn(x)
-
-        # Up
-        for upsample, attn_block in self.ups:
-            x = upsample(x)
-            x = attn_block(x)
-
-        # End
-        x = rearrange(x, "b l c -> b c l")
-        x = self.end_conv(x)
-
-        return torch.tanh(x) if self.use_tanh else x
-
-
-class EncoderBlockV2(nn.Module):
-    def __init__(
-        self: "EncoderBlockV2",
+        self: "EncoderBlock",
         dim_in: int,
         dim_out: int,
         stride: int,
@@ -238,11 +76,11 @@ class EncoderBlockV2(nn.Module):
             CausalConv1d(dim_in, dim_out, stride * 2, stride=stride),
         )
 
-    def forward(self: "EncoderBlockV2", x: torch.Tensor) -> torch.Tensor:
+    def forward(self: "EncoderBlock", x: torch.Tensor) -> torch.Tensor:
         return self.layers(x)
 
 
-class EncoderAttnV2(nn.Module):
+class EncoderAttn(nn.Module):
     def __init__(
         self: "EncoderAttn",
         dim_in: int,
@@ -254,6 +92,7 @@ class EncoderAttnV2(nn.Module):
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 1024,
+        attn_dynamic_pos_bias: bool = False,
         squeeze_excite: bool = False,
     ) -> None:
         super().__init__()
@@ -268,7 +107,7 @@ class EncoderAttnV2(nn.Module):
             layer_dim_in, layer_dim_out = in_out[ind]
             stride = strides[ind]
             down_blocks.append(
-                EncoderBlockV2(
+                EncoderBlock(
                     dim_in=layer_dim_in,
                     dim_out=layer_dim_out,
                     stride=stride,
@@ -287,6 +126,7 @@ class EncoderAttnV2(nn.Module):
             heads=attn_heads,
             dim_head=attn_dim_head,
             window_size=attn_window_size,
+            dynamic_pos_bias=attn_dynamic_pos_bias,
         )
 
     def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
@@ -300,9 +140,9 @@ class EncoderAttnV2(nn.Module):
         return x
 
 
-class DecoderBlockV2(nn.Module):
+class DecoderBlock(nn.Module):
     def __init__(
-        self: "DecoderBlockV2",
+        self: "DecoderBlock",
         dim_in: int,
         dim_out: int,
         stride: int,
@@ -336,13 +176,13 @@ class DecoderBlockV2(nn.Module):
             ),
         )
 
-    def forward(self: "DecoderBlockV2", x: torch.Tensor) -> torch.Tensor:
+    def forward(self: "DecoderBlock", x: torch.Tensor) -> torch.Tensor:
         return self.layers(x)
 
 
-class DecoderAttnV2(nn.Module):
+class DecoderAttn(nn.Module):
     def __init__(
-        self: "DecoderAttnV2",
+        self: "DecoderAttn",
         dim_in: int,
         dim_h: int,
         dim_emb: int,
@@ -352,6 +192,7 @@ class DecoderAttnV2(nn.Module):
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 1024,
+        attn_dynamic_pos_bias: bool = False,
         squeeze_excite: bool = False,
         use_tanh: bool = False,
     ) -> None:
@@ -370,6 +211,7 @@ class DecoderAttnV2(nn.Module):
             heads=attn_heads,
             dim_head=attn_dim_head,
             window_size=attn_window_size,
+            dynamic_pos_bias=attn_dynamic_pos_bias,
         )
 
         # Up
@@ -378,7 +220,7 @@ class DecoderAttnV2(nn.Module):
             layer_dim_in, layer_dim_out = in_out[ind]
             stride = strides[ind]
             up_blocks.append(
-                DecoderBlockV2(
+                DecoderBlock(
                     dim_in=layer_dim_in,
                     dim_out=layer_dim_out,
                     stride=stride,
@@ -392,7 +234,7 @@ class DecoderAttnV2(nn.Module):
             CausalConv1d(dims_h[-1], dim_in, 7),
         )
 
-    def forward(self: "DecoderAttnV2", x: torch.Tensor) -> torch.Tensor:
+    def forward(self: "DecoderAttn", x: torch.Tensor) -> torch.Tensor:
         x = self.attn(x)
 
         # Up
@@ -416,6 +258,7 @@ class VQVAE(nn.Module):
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 1024,
+        attn_dynamic_pos_bias: bool = False,
         num_codebooks: int = 8,
         vq_groups: int = 1,
         vq_decay: float = 0.95,
@@ -424,7 +267,6 @@ class VQVAE(nn.Module):
         vq_stochastic_sample_codes: bool = False,
         discriminator_scales: Tuple[float] = (1.0, 0.5, 0.25),
         use_tanh: bool = False,
-        use_hinge_loss: bool = False,
         recon_loss_weight: float = 1.0,
         gan_loss_weight: float = 1.0,
         feature_loss_weight: float = 100.0,
@@ -434,7 +276,7 @@ class VQVAE(nn.Module):
         self.gan_loss_weight = gan_loss_weight
         self.feature_loss_weight = feature_loss_weight
 
-        self.encoder = EncoderAttnV2(
+        self.encoder = EncoderAttn(
             dim_in=dim_in,
             dim_h=dim_h,
             dim_emb=dim_emb,
@@ -444,9 +286,10 @@ class VQVAE(nn.Module):
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
+            attn_dynamic_pos_bias=attn_dynamic_pos_bias,
         )
 
-        self.decoder = DecoderAttnV2(
+        self.decoder = DecoderAttn(
             dim_in=dim_in,
             dim_h=dim_h,
             dim_emb=dim_emb,
@@ -456,6 +299,7 @@ class VQVAE(nn.Module):
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
+            attn_dynamic_pos_bias=attn_dynamic_pos_bias,
             use_tanh=use_tanh,
         )
         self.vq = GroupedResidualVQ(
@@ -492,10 +336,8 @@ class VQVAE(nn.Module):
             ],
         )
 
-        self.gen_loss = hinge_generator_loss if use_hinge_loss else bce_generator_loss
-        self.disc_loss = (
-            hinge_discriminator_loss if use_hinge_loss else bce_discriminator_loss
-        )
+        self.gen_loss = hinge_generator_loss
+        self.disc_loss = hinge_discriminator_loss
 
     def encode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
