@@ -31,18 +31,17 @@ class StreamPerSample(IterableDataset):
         if worker_info is None:
             num_workers = 1
             worker_id = 0
-            seed = torch.initial_seed()
+            # seed = torch.initial_seed()
         else:
             num_workers = worker_info.num_workers
             worker_id = worker_info.id
-            seed = worker_info.seed
+            # seed = worker_info.seed
 
-        random.seed(seed)
-
-        dataset = sorted(self.dataset)
+        # random.seed(seed)
+        # dataset = sorted(self.dataset)
         for i, sample in random.sample(
-            list(enumerate(dataset)),
-            int(len(dataset) * self.sample_density),
+            list(enumerate(self.dataset)),
+            int(len(self.dataset) * self.sample_density),
         ):
             if i % num_workers != worker_id:
                 continue
