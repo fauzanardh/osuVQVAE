@@ -268,7 +268,7 @@ class VQVAE(nn.Module):
         attn_dim_head: int = 64,
         attn_window_size: int = 1024,
         attn_dynamic_pos_bias: bool = False,
-        num_codebooks: int = 8,
+        vq_num_codebooks: int = 8,
         vq_groups: int = 1,
         vq_decay: float = 0.95,
         vq_commitment_weight: float = 1.0,
@@ -314,8 +314,8 @@ class VQVAE(nn.Module):
         )
         self.vq = GroupedResidualVQ(
             dim=dim_emb,
-            num_quantizers=num_codebooks,
             codebook_size=n_emb,
+            num_quantizers=vq_num_codebooks,
             groups=vq_groups,
             decay=vq_decay,
             commitment_weight=vq_commitment_weight,
