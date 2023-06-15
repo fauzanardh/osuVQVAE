@@ -262,7 +262,7 @@ class VQVAE(nn.Module):
         dim_emb: int,
         n_emb: int,
         dim_h_mult: Tuple[int] = (2, 4, 8, 16),
-        strides: Tuple[int] = (2, 4, 4, 8),
+        strides: Tuple[int] = (2, 4, 5, 8),
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,

@@ -33,7 +33,9 @@ class Discriminator(nn.Module):
         )
 
     def forward(
-        self: "Discriminator", x: torch.Tensor, return_intermediates: bool = False
+        self: "Discriminator",
+        x: torch.Tensor,
+        return_intermediates: bool = False,
     ) -> torch.Tensor:
         intermediates = []
         for layer in self.layers:
