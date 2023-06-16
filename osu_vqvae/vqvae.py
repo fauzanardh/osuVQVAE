@@ -419,11 +419,14 @@ class VQVAE(nn.Module):
                 + commit_loss.sum()
             )
         else:
-            loss = (
-                recon_loss * self.recon_loss_weight,
-                gan_loss * self.gan_loss_weight,
-                feature_loss * self.feature_loss_weight,
-                commit_loss.sum(),
+            loss = torch.stack(
+                [
+                    recon_loss * self.recon_loss_weight,
+                    gan_loss * self.gan_loss_weight,
+                    feature_loss * self.feature_loss_weight,
+                    commit_loss.sum(),
+                ],
+                dim=0,
             )
         if return_recons:
             return loss, recon_sig
