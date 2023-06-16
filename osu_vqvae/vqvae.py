@@ -392,7 +392,7 @@ class VQVAE(nn.Module):
                     discriminator,
                     (real.requires_grad_(), fake),
                 )
-                disc_loss = self.disc_loss(real_disc_logits, fake_disc_logits)
+                disc_loss = self.disc_loss(fake_disc_logits, real_disc_logits)
 
                 if add_gradient_penalty:
                     disc_loss += gradient_penalty(real, disc_loss)
