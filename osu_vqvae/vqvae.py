@@ -352,6 +352,7 @@ class VQVAE(nn.Module):
     def forward(
         self: "VQVAE",
         sig: torch.Tensor,
+        seperate_loss: bool = False,
         return_loss: float = False,
         return_disc_loss: float = False,
         return_recons: float = True,
@@ -410,12 +411,20 @@ class VQVAE(nn.Module):
             feature_losses.extend(losses)
         feature_loss = torch.stack(feature_losses).mean()
 
-        loss = (
-            recon_loss * self.recon_loss_weight
-            + gan_loss * self.gan_loss_weight
-            + feature_loss * self.feature_loss_weight
-            + commit_loss.sum()
-        )
+        if not seperate_loss:
+            loss = (
+                recon_loss * self.recon_loss_weight
+                + gan_loss * self.gan_loss_weight
+                + feature_loss * self.feature_loss_weight
+                + commit_loss.sum()
+            )
+        else:
+            loss = (
+                recon_loss * self.recon_loss_weight,
+                gan_loss * self.gan_loss_weight,
+                feature_loss * self.feature_loss_weight,
+                commit_loss.sum(),
+            )
         if return_recons:
             return loss, recon_sig
         else:
