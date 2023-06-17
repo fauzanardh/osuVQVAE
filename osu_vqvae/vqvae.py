@@ -373,7 +373,7 @@ class VQVAE(nn.Module):
                 self.discriminator,
                 (sig, recon_sig),
             )
-            loss = self.disc_loss(real_disc_logits, fake_disc_logits)
+            loss = self.disc_loss(fake_disc_logits, real_disc_logits)
 
             if add_gradient_penalty:
                 loss += gradient_penalty(sig, real_disc_logits)
