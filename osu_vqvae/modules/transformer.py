@@ -202,7 +202,7 @@ class LocalTransformerBlock(nn.Module):
                             dim_head=dim_head,
                             qk_rmsnorm=True,
                             window_size=window_size,
-                            use_rotary_pos_emb=not dynamic_pos_bias,
+                            use_rotary_pos_emb=self.rel_pos is None,
                             use_xpos=True,
                             prenorm=True,
                             causal=True,
