@@ -56,10 +56,8 @@ class ResidualBlock(nn.Module):
             nn.Sequential(
                 CausalConv1d(dim_in, dim_out, kernel_size, dilation=dilation),
                 nn.ELU(),
-                nn.BatchNorm1d(dim_out),
                 CausalConv1d(dim_out, dim_out, 1),
                 nn.ELU(),
-                nn.BatchNorm1d(dim_out),
                 SqueezeExcite(dim_out) if squeeze_excite else nn.Identity(),
             ),
         )
