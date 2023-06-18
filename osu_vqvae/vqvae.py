@@ -3,6 +3,7 @@ from typing import Tuple, Union
 
 import torch
 from einops import rearrange, reduce
+from einops.layers.torch import Rearrange
 from torch import nn
 from torch.nn import functional as F
 from vector_quantize_pytorch import GroupedResidualVQ
@@ -58,6 +59,7 @@ class EncoderAttn(nn.Module):
 
         self.pre_conv = CausalConv1d(dim_in, dim_h, 7)
         self.post_conv = CausalConv1d(dims_h[-1], dim_emb, 3)
+        self.norm = nn.LayerNorm(dim_emb)
 
         # Down
         self.downs = nn.ModuleList([])
@@ -99,7 +101,7 @@ class EncoderAttn(nn.Module):
 
         # Rearrange to (batch, length, channels)
         x = rearrange(x, "b c l -> b l c")
-        return x
+        return self.norm(x)
 
 
 class DecoderAttn(nn.Module):
@@ -135,7 +137,11 @@ class DecoderAttn(nn.Module):
         num_layers = len(in_out)
 
         self.pre_conv = CausalConv1d(dim_emb, dims_h[-1], 7)
-        self.post_conv = CausalConv1d(dim_h, dim_in, 3)
+        self.to_logits = nn.Sequential(
+            nn.LayerNorm(dim_h),
+            Rearrange("b l c -> b c l"),
+            CausalConv1d(dim_h, dim_in, 3),
+        )
 
         # Up
         self.ups = nn.ModuleList([])
@@ -174,8 +180,7 @@ class DecoderAttn(nn.Module):
             x = attn_block(x)
 
         # Rearrange to (batch, channels, length)
-        x = rearrange(x, "b l c -> b c l")
-        x = self.post_conv(x)
+        x = self.to_logits(x)
 
         return torch.tanh(x) if self.use_tanh else x
 
