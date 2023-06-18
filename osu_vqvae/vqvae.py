@@ -101,9 +101,15 @@ class EncoderAttn(nn.Module):
         attn_dim_head: int = 64,
         attn_window_size: int = 1024,
         attn_dynamic_pos_bias: bool = False,
+        attn_alibi_pos_bias: bool = False,
         squeeze_excite: bool = False,
     ) -> None:
         super().__init__()
+
+        assert not (
+            attn_dynamic_pos_bias and attn_alibi_pos_bias
+        ), "Cannot have both dynamic and alibi positional bias"
+
         dims_h = tuple((dim_h * m for m in dim_h_mult))
         dims_h = (dim_h, *dims_h)
         in_out = tuple(zip(dims_h[:-1], dims_h[1:]))
@@ -135,6 +141,7 @@ class EncoderAttn(nn.Module):
             dim_head=attn_dim_head,
             window_size=attn_window_size,
             dynamic_pos_bias=attn_dynamic_pos_bias,
+            alibi_pos_bias=attn_alibi_pos_bias,
         )
 
     def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
@@ -201,10 +208,16 @@ class DecoderAttn(nn.Module):
         attn_dim_head: int = 64,
         attn_window_size: int = 1024,
         attn_dynamic_pos_bias: bool = False,
+        attn_alibi_pos_bias: bool = False,
         squeeze_excite: bool = False,
         use_tanh: bool = False,
     ) -> None:
         super().__init__()
+
+        assert not (
+            attn_dynamic_pos_bias and attn_alibi_pos_bias
+        ), "Cannot have both dynamic and alibi positional bias"
+
         self.use_tanh = use_tanh
 
         dims_h = tuple((dim_h * m for m in dim_h_mult))
@@ -221,6 +234,7 @@ class DecoderAttn(nn.Module):
             dim_head=attn_dim_head,
             window_size=attn_window_size,
             dynamic_pos_bias=attn_dynamic_pos_bias,
+            alibi_pos_bias=attn_alibi_pos_bias,
         )
 
         # Up
@@ -268,6 +282,7 @@ class VQVAE(nn.Module):
         attn_dim_head: int = 64,
         attn_window_size: int = 1024,
         attn_dynamic_pos_bias: bool = False,
+        attn_alibi_pos_bias: bool = False,
         vq_num_codebooks: int = 8,
         vq_groups: int = 1,
         vq_decay: float = 0.95,
@@ -297,6 +312,7 @@ class VQVAE(nn.Module):
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
             attn_dynamic_pos_bias=attn_dynamic_pos_bias,
+            attn_alibi_pos_bias=attn_alibi_pos_bias,
         )
 
         self.decoder = DecoderAttn(
@@ -310,6 +326,7 @@ class VQVAE(nn.Module):
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
             attn_dynamic_pos_bias=attn_dynamic_pos_bias,
+            attn_alibi_pos_bias=attn_alibi_pos_bias,
             use_tanh=use_tanh,
         )
         self.vq = GroupedResidualVQ(
