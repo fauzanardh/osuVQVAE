@@ -57,9 +57,12 @@ class EncoderAttn(nn.Module):
         in_out = tuple(zip(dims_h[:-1], dims_h[1:]))
         num_layers = len(in_out)
 
-        self.pre_conv = CausalConv1d(dim_in, dim_h, 7)
-        self.post_conv = CausalConv1d(dims_h[-1], dim_emb, 3)
-        self.norm = nn.LayerNorm(dim_emb)
+        self.init_conv = CausalConv1d(dim_in, dim_h, 7)
+        self.pre_quant = nn.Sequential(
+            CausalConv1d(dims_h[-1], dim_emb, 3),
+            Rearrange("b c l -> b l c"),
+            nn.LayerNorm(dim_emb),
+        )
 
         # Down
         self.downs = nn.ModuleList([])
@@ -85,7 +88,7 @@ class EncoderAttn(nn.Module):
             )
 
     def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
-        x = self.pre_conv(x)
+        x = self.init_conv(x)
 
         # Rearrange to (batch, length, channels)
         x = rearrange(x, "b c l -> b l c")
@@ -97,11 +100,8 @@ class EncoderAttn(nn.Module):
 
         # Rearrange to (batch, channels, length)
         x = rearrange(x, "b l c -> b c l")
-        x = self.post_conv(x)
 
-        # Rearrange to (batch, length, channels)
-        x = rearrange(x, "b c l -> b l c")
-        return self.norm(x)
+        return self.pre_quant(x)
 
 
 class DecoderAttn(nn.Module):
