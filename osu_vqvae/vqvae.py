@@ -7,9 +7,9 @@ from torch import nn
 from torch.nn import functional as F
 from vector_quantize_pytorch import GroupedResidualVQ
 
-from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspose1d
+from osu_vqvae.modules.causal_convolution import CausalConv1d
 from osu_vqvae.modules.discriminator import Discriminator
-from osu_vqvae.modules.residual import ResidualBlock
+from osu_vqvae.modules.scaler import DownsampleLinear, UpsampleLinear
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 from osu_vqvae.modules.utils import gradient_penalty, log
 
@@ -30,42 +30,6 @@ def hinge_generator_loss(fake: torch.Tensor) -> torch.Tensor:
     return -fake.mean()
 
 
-class EncoderBlock(nn.Module):
-    def __init__(
-        self: "EncoderBlock",
-        dim_in: int,
-        dim_out: int,
-        stride: int,
-        dilations: Tuple[int] = (1, 3, 9),
-        squeeze_excite: bool = False,
-    ) -> None:
-        super().__init__()
-        self.layers = nn.Sequential(
-            ResidualBlock(
-                dim_in=dim_in,
-                dim_out=dim_in,
-                dilation=dilations[0],
-                squeeze_excite=squeeze_excite,
-            ),
-            ResidualBlock(
-                dim_in=dim_in,
-                dim_out=dim_in,
-                dilation=dilations[1],
-                squeeze_excite=squeeze_excite,
-            ),
-            ResidualBlock(
-                dim_in=dim_in,
-                dim_out=dim_in,
-                dilation=dilations[2],
-                squeeze_excite=squeeze_excite,
-            ),
-            CausalConv1d(dim_in, dim_out, stride * 2, stride=stride),
-        )
-
-    def forward(self: "EncoderBlock", x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
-
-
 class EncoderAttn(nn.Module):
     def __init__(
         self: "EncoderAttn",
@@ -74,13 +38,12 @@ class EncoderAttn(nn.Module):
         dim_emb: int,
         dim_h_mult: Tuple[int] = (2, 4, 8, 16),
         strides: Tuple[int] = (2, 4, 4, 8),
-        attn_depth: int = 2,
+        attn_depth: int = 1,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 1024,
+        attn_window_size: int = 256,
         attn_dynamic_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
-        squeeze_excite: bool = False,
     ) -> None:
         super().__init__()
 
@@ -93,84 +56,49 @@ class EncoderAttn(nn.Module):
         in_out = tuple(zip(dims_h[:-1], dims_h[1:]))
         num_layers = len(in_out)
 
+        self.pre_conv = CausalConv1d(dim_in, dim_h, 7)
+        self.post_conv = CausalConv1d(dims_h[-1], dim_emb, 3)
+
         # Down
-        down_blocks = []
+        self.downs = nn.ModuleList([])
         for ind in range(num_layers):
             layer_dim_in, layer_dim_out = in_out[ind]
             stride = strides[ind]
-            down_blocks.append(
-                EncoderBlock(
-                    dim_in=layer_dim_in,
-                    dim_out=layer_dim_out,
-                    stride=stride,
-                    squeeze_excite=squeeze_excite,
+            self.downs.append(
+                nn.ModuleList(
+                    [
+                        DownsampleLinear(layer_dim_in, layer_dim_out, stride),
+                        LocalTransformerBlock(
+                            dim=layer_dim_out,
+                            depth=attn_depth,
+                            heads=attn_heads,
+                            dim_head=attn_dim_head,
+                            window_size=attn_window_size,
+                            dynamic_pos_bias=attn_dynamic_pos_bias,
+                            alibi_pos_bias=attn_alibi_pos_bias,
+                        ),
+                    ],
                 ),
             )
 
-        self.downs = nn.Sequential(
-            CausalConv1d(dim_in, dim_h, 7),
-            *down_blocks,
-            CausalConv1d(dims_h[-1], dim_emb, 3),
-        )
-        self.attn = LocalTransformerBlock(
-            dim=dim_emb,
-            depth=attn_depth,
-            heads=attn_heads,
-            dim_head=attn_dim_head,
-            window_size=attn_window_size,
-            dynamic_pos_bias=attn_dynamic_pos_bias,
-            alibi_pos_bias=attn_alibi_pos_bias,
-        )
-
     def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
-        x = self.downs(x)
+        x = self.pre_conv(x)
 
-        # Attention
-        # rearrange to (batch, length, channels)
+        # Rearrange to (batch, length, channels)
         x = rearrange(x, "b c l -> b l c")
-        x = self.attn(x)
 
+        # Down
+        for downsample, attn_block in self.downs:
+            x = downsample(x)
+            x = attn_block(x)
+
+        # Rearrange to (batch, channels, length)
+        x = rearrange(x, "b l c -> b c l")
+        x = self.post_conv(x)
+
+        # Rearrange to (batch, length, channels)
+        x = rearrange(x, "b c l -> b l c")
         return x
-
-
-class DecoderBlock(nn.Module):
-    def __init__(
-        self: "DecoderBlock",
-        dim_in: int,
-        dim_out: int,
-        stride: int,
-        dilations: Tuple[int] = (1, 3, 9),
-        squeeze_excite: bool = False,
-    ) -> None:
-        super().__init__()
-        # even_stride = stride % 2 == 0
-        # padding = (stride + (0 if even_stride else 1)) // 2
-        # output_padding = 0 if even_stride else 1
-
-        self.layers = nn.Sequential(
-            CausalConvTranspose1d(dim_in, dim_out, 2 * stride, stride=stride),
-            ResidualBlock(
-                dim_in=dim_out,
-                dim_out=dim_out,
-                dilation=dilations[0],
-                squeeze_excite=squeeze_excite,
-            ),
-            ResidualBlock(
-                dim_in=dim_out,
-                dim_out=dim_out,
-                dilation=dilations[1],
-                squeeze_excite=squeeze_excite,
-            ),
-            ResidualBlock(
-                dim_in=dim_out,
-                dim_out=dim_out,
-                dilation=dilations[2],
-                squeeze_excite=squeeze_excite,
-            ),
-        )
-
-    def forward(self: "DecoderBlock", x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
 
 
 class DecoderAttn(nn.Module):
@@ -181,13 +109,12 @@ class DecoderAttn(nn.Module):
         dim_emb: int,
         dim_h_mult: Tuple[int] = (2, 4, 8, 16),
         strides: Tuple[int] = (2, 4, 4, 8),
-        attn_depth: int = 2,
+        attn_depth: int = 1,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 1024,
+        attn_window_size: int = 256,
         attn_dynamic_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
-        squeeze_excite: bool = False,
         use_tanh: bool = False,
     ) -> None:
         super().__init__()
@@ -205,43 +132,47 @@ class DecoderAttn(nn.Module):
         in_out = tuple(in_out)
         num_layers = len(in_out)
 
-        self.attn = LocalTransformerBlock(
-            dim=dim_emb,
-            depth=attn_depth,
-            heads=attn_heads,
-            dim_head=attn_dim_head,
-            window_size=attn_window_size,
-            dynamic_pos_bias=attn_dynamic_pos_bias,
-            alibi_pos_bias=attn_alibi_pos_bias,
-        )
+        self.pre_conv = CausalConv1d(dim_emb, dims_h[-1], 7)
+        self.post_conv = CausalConv1d(dim_h, dim_in, 3)
 
         # Up
-        up_blocks = []
+        self.ups = nn.ModuleList([])
         for ind in range(num_layers):
             layer_dim_out, layer_dim_in = in_out[ind]
             stride = strides[ind]
-            up_blocks.append(
-                DecoderBlock(
-                    dim_in=layer_dim_in,
-                    dim_out=layer_dim_out,
-                    stride=stride,
-                    squeeze_excite=squeeze_excite,
+            self.ups.append(
+                nn.ModuleList(
+                    [
+                        UpsampleLinear(layer_dim_in, layer_dim_out, stride),
+                        LocalTransformerBlock(
+                            dim=layer_dim_out,
+                            depth=attn_depth,
+                            heads=attn_heads,
+                            dim_head=attn_dim_head,
+                            window_size=attn_window_size,
+                            dynamic_pos_bias=attn_dynamic_pos_bias,
+                            alibi_pos_bias=attn_alibi_pos_bias,
+                        ),
+                    ],
                 ),
             )
 
-        self.ups = nn.Sequential(
-            CausalConv1d(dim_emb, dims_h[-1], 7),
-            *up_blocks,
-            CausalConv1d(dim_h, dim_in, 7),
-        )
-
     def forward(self: "DecoderAttn", x: torch.Tensor) -> torch.Tensor:
-        x = self.attn(x)
+        # Rearrange to (batch, channels, length)
+        x = rearrange(x, "b l c -> b c l")
+        x = self.pre_conv(x)
+
+        # Rearrange to (batch, length, channels)
+        x = rearrange(x, "b c l -> b l c")
 
         # Up
-        # rearrange to (batch, channels, length)
+        for upsample, attn_block in self.ups:
+            x = upsample(x)
+            x = attn_block(x)
+
+        # Rearrange to (batch, channels, length)
         x = rearrange(x, "b l c -> b c l")
-        x = self.ups(x)
+        x = self.post_conv(x)
 
         return torch.tanh(x) if self.use_tanh else x
 
@@ -261,6 +192,8 @@ class VQVAE(nn.Module):
         attn_window_size: int = 1024,
         attn_dynamic_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
+        res_block_dilations: Tuple[int] = (1, 3, 9),
+        res_block_squeeze_excite: bool = False,
         vq_num_codebooks: int = 8,
         vq_groups: int = 1,
         vq_decay: float = 0.95,
