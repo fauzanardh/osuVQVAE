@@ -159,8 +159,8 @@ class TransformerBlock(nn.Module):
 
     def forward(self: "TransformerBlock", x: torch.Tensor) -> torch.Tensor:
         for attn, ff in self.layers:
-            x = attn(x) + x
-            x = ff(x) + x
+            x = attn(shift_token(x)) + x
+            x = ff(shift_token(x)) + x
         return x
 
 
@@ -218,6 +218,6 @@ class LocalTransformerBlock(nn.Module):
             attn_bias = self.rel_pos(self.ws, self.ws * 2)
 
         for attn, ff in self.layers:
-            x = attn(x, attn_bias=attn_bias) + x
-            x = ff(x) + x
+            x = attn(shift_token(x), attn_bias=attn_bias) + x
+            x = ff(shift_token(x)) + x
         return x
