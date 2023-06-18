@@ -36,9 +36,9 @@ class EncoderAttn(nn.Module):
         dim_in: int,
         dim_h: int,
         dim_emb: int,
-        dim_h_mult: Tuple[int] = (2, 4, 8, 16),
-        strides: Tuple[int] = (2, 4, 4, 8),
-        attn_depth: int = 1,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        strides: Tuple[int] = (2, 2, 2, 2),
+        attn_depths: Tuple[int] = (2, 2, 2, 4),
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 256,
@@ -64,6 +64,7 @@ class EncoderAttn(nn.Module):
         for ind in range(num_layers):
             layer_dim_in, layer_dim_out = in_out[ind]
             stride = strides[ind]
+            attn_depth = attn_depths[ind]
             self.downs.append(
                 nn.ModuleList(
                     [
@@ -107,9 +108,9 @@ class DecoderAttn(nn.Module):
         dim_in: int,
         dim_h: int,
         dim_emb: int,
-        dim_h_mult: Tuple[int] = (2, 4, 8, 16),
-        strides: Tuple[int] = (2, 4, 4, 8),
-        attn_depth: int = 1,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        strides: Tuple[int] = (2, 2, 2, 2),
+        attn_depths: Tuple[int] = (2, 2, 2, 4),
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 256,
@@ -128,6 +129,7 @@ class DecoderAttn(nn.Module):
         dims_h = tuple((dim_h * m for m in dim_h_mult))
         dims_h = (dim_h, *dims_h)
         strides = tuple(reversed(strides))
+        attn_depths = tuple(reversed(attn_depths))
         in_out = reversed(tuple(zip(dims_h[:-1], dims_h[1:])))
         in_out = tuple(in_out)
         num_layers = len(in_out)
@@ -140,6 +142,7 @@ class DecoderAttn(nn.Module):
         for ind in range(num_layers):
             layer_dim_out, layer_dim_in = in_out[ind]
             stride = strides[ind]
+            attn_depth = attn_depths[ind]
             self.ups.append(
                 nn.ModuleList(
                     [
@@ -184,20 +187,18 @@ class VQVAE(nn.Module):
         dim_h: int,
         dim_emb: int,
         n_emb: int,
-        dim_h_mult: Tuple[int] = (2, 4, 8, 16),
-        strides: Tuple[int] = (2, 4, 5, 8),
-        attn_depth: int = 2,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        strides: Tuple[int] = (2, 2, 2, 2),
+        attn_depths: Tuple[int] = (2, 2, 2, 4),
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 1024,
+        attn_window_size: int = 256,
         attn_dynamic_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
-        res_block_dilations: Tuple[int] = (1, 3, 9),
-        res_block_squeeze_excite: bool = False,
         vq_num_codebooks: int = 8,
         vq_groups: int = 1,
         vq_decay: float = 0.95,
-        vq_commitment_weight: float = 1.0,
+        vq_commitment_weight: float = 0.0,
         vq_quantize_dropout_cutoff_index: int = 1,
         vq_stochastic_sample_codes: bool = False,
         discriminator_layers: int = 4,
@@ -205,7 +206,7 @@ class VQVAE(nn.Module):
         use_hinge_loss: bool = False,
         recon_loss_weight: float = 1.0,
         gan_loss_weight: float = 1.0,
-        feature_loss_weight: float = 100.0,
+        feature_loss_weight: float = 0.0,
     ) -> None:
         super().__init__()
         self.recon_loss_weight = recon_loss_weight
@@ -218,7 +219,7 @@ class VQVAE(nn.Module):
             dim_emb=dim_emb,
             dim_h_mult=dim_h_mult,
             strides=strides,
-            attn_depth=attn_depth,
+            attn_depths=attn_depths,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
@@ -232,7 +233,7 @@ class VQVAE(nn.Module):
             dim_emb=dim_emb,
             dim_h_mult=dim_h_mult,
             strides=strides,
-            attn_depth=attn_depth,
+            attn_depths=attn_depths,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
