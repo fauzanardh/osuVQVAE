@@ -11,29 +11,7 @@ from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspo
 from osu_vqvae.modules.discriminator import Discriminator
 from osu_vqvae.modules.residual import ResidualBlock
 from osu_vqvae.modules.transformer import LocalTransformerBlock
-
-
-def log(t: torch.Tensor) -> torch.Tensor:
-    eps = torch.finfo(t.dtype).eps
-    return torch.log(t + eps)
-
-
-def gradient_penalty(
-    sig: torch.Tensor,
-    output: torch.Tensor,
-    weight: int = 10,
-) -> torch.Tensor:
-    gradients = torch.autograd.grad(
-        outputs=output,
-        inputs=sig,
-        grad_outputs=torch.ones_like(output, device=sig.device),
-        create_graph=True,
-        retain_graph=True,
-        only_inputs=True,
-    )[0]
-
-    gradients = rearrange(gradients, "b ... -> b (...)")
-    return weight * ((gradients.norm(2, dim=-1) - 1) ** 2).mean()
+from osu_vqvae.modules.utils import gradient_penalty, log
 
 
 def bce_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
