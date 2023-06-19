@@ -19,12 +19,28 @@ def bce_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tens
     return (-log(1 - torch.sigmoid(fake)) - log(torch.sigmoid(real))).mean()
 
 
+def bce_discriminator_fake_loss(fake: torch.Tensor) -> torch.Tensor:
+    return -log(1 - torch.sigmoid(fake)).mean()
+
+
+def bce_discriminator_real_loss(real: torch.Tensor) -> torch.Tensor:
+    return -log(torch.sigmoid(real)).mean()
+
+
 def bce_generator_loss(fake: torch.Tensor) -> torch.Tensor:
     return -log(torch.sigmoid(fake)).mean()
 
 
 def hinge_discriminator_loss(fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
     return (F.relu(1 + fake) + F.relu(1 - real)).mean()
+
+
+def hinge_discriminator_fake_loss(fake: torch.Tensor) -> torch.Tensor:
+    return F.relu(1 + fake).mean()
+
+
+def hinge_discriminator_real_loss(real: torch.Tensor) -> torch.Tensor:
+    return F.relu(1 - real).mean()
 
 
 def hinge_generator_loss(fake: torch.Tensor) -> torch.Tensor:
@@ -209,11 +225,13 @@ class VQVAE(nn.Module):
         discriminator_layers: int = 4,
         use_tanh: bool = False,
         use_hinge_loss: bool = False,
+        split_disc_loss: bool = False,
         recon_loss_weight: float = 1.0,
         gan_loss_weight: float = 1.0,
         feature_loss_weight: float = 0.0,
     ) -> None:
         super().__init__()
+        self.split_disc_loss = split_disc_loss
         self.recon_loss_weight = recon_loss_weight
         self.gan_loss_weight = gan_loss_weight
         self.feature_loss_weight = feature_loss_weight
@@ -231,21 +249,6 @@ class VQVAE(nn.Module):
             attn_dynamic_pos_bias=attn_dynamic_pos_bias,
             attn_alibi_pos_bias=attn_alibi_pos_bias,
         )
-
-        self.decoder = DecoderAttn(
-            dim_in=dim_in,
-            dim_h=dim_h,
-            dim_emb=dim_emb,
-            dim_h_mult=dim_h_mult,
-            strides=strides,
-            attn_depths=attn_depths,
-            attn_heads=attn_heads,
-            attn_dim_head=attn_dim_head,
-            attn_window_size=attn_window_size,
-            attn_dynamic_pos_bias=attn_dynamic_pos_bias,
-            attn_alibi_pos_bias=attn_alibi_pos_bias,
-            use_tanh=use_tanh,
-        )
         self.vq = GroupedResidualVQ(
             dim=dim_emb,
             codebook_size=n_emb,
@@ -260,6 +263,20 @@ class VQVAE(nn.Module):
             threshold_ema_dead_code=2,
             stochastic_sample_codes=vq_stochastic_sample_codes,
         )
+        self.decoder = DecoderAttn(
+            dim_in=dim_in,
+            dim_h=dim_h,
+            dim_emb=dim_emb,
+            dim_h_mult=dim_h_mult,
+            strides=strides,
+            attn_depths=attn_depths,
+            attn_heads=attn_heads,
+            attn_dim_head=attn_dim_head,
+            attn_window_size=attn_window_size,
+            attn_dynamic_pos_bias=attn_dynamic_pos_bias,
+            attn_alibi_pos_bias=attn_alibi_pos_bias,
+            use_tanh=use_tanh,
+        )
 
         # Discriminator
         layer_mults = [2**i for i in range(discriminator_layers)]
@@ -267,9 +284,21 @@ class VQVAE(nn.Module):
         self.discriminator = Discriminator(dim_in=dim_in, h_dims=layer_dims)
 
         self.gen_loss = hinge_generator_loss if use_hinge_loss else bce_generator_loss
-        self.disc_loss = (
-            hinge_discriminator_loss if use_hinge_loss else bce_discriminator_loss
-        )
+        if not self.split_disc_loss:
+            self.disc_loss = (
+                hinge_discriminator_loss if use_hinge_loss else bce_discriminator_loss
+            )
+        else:
+            self.disc_fake_loss = (
+                hinge_discriminator_fake_loss
+                if use_hinge_loss
+                else bce_discriminator_fake_loss
+            )
+            self.disc_real_loss = (
+                hinge_discriminator_real_loss
+                if use_hinge_loss
+                else bce_discriminator_real_loss
+            )
 
     def encode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
@@ -283,7 +312,7 @@ class VQVAE(nn.Module):
         x = reduce(codes, "g q b l c -> b l (g c)", "sum")
         return self.decode(x)
 
-    def forward(
+    def forward(  # noqa: C901
         self: "VQVAE",
         sig: torch.Tensor,
         seperate_loss: bool = False,
@@ -307,15 +336,30 @@ class VQVAE(nn.Module):
                 self.discriminator,
                 (sig, recon_sig),
             )
-            loss = self.disc_loss(fake_disc_logits, real_disc_logits)
 
-            if add_gradient_penalty:
-                loss += gradient_penalty(sig, real_disc_logits)
+            if not self.split_disc_loss:
+                loss = self.disc_loss(fake_disc_logits, real_disc_logits)
 
-            if return_recons:
-                return loss, recon_sig
+                if add_gradient_penalty:
+                    loss += gradient_penalty(sig, real_disc_logits)
+
+                if return_recons:
+                    return loss, recon_sig
+                else:
+                    return loss
             else:
-                return loss
+                fake_loss = self.disc_fake_loss(fake_disc_logits)
+                real_loss = self.disc_real_loss(real_disc_logits)
+
+                combined_loss = fake_loss + real_loss
+
+                if add_gradient_penalty:
+                    combined_loss += gradient_penalty(sig, real_disc_logits)
+
+                if return_recons:
+                    return fake_loss, real_loss, combined_loss, recon_sig
+                else:
+                    return fake_loss, real_loss, combined_loss
 
         # Recon loss
         recon_loss = F.mse_loss(sig, recon_sig)
