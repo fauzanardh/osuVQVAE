@@ -314,37 +314,37 @@ class VQVAE(nn.Module):
 
     def forward(  # noqa: C901
         self: "VQVAE",
-        sig: torch.Tensor,
+        x: torch.Tensor,
         seperate_loss: bool = False,
         return_loss: float = False,
         return_disc_loss: float = False,
         return_recons: float = True,
         add_gradient_penalty: float = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        quantized, _, commit_loss = self.encode(sig)
-        recon_sig = self.decode(quantized)
+        orig_x = x.clone()
+        quantized, _, commit_loss = self.encode(x)
+        recon_x = self.decode(quantized)
 
         if not (return_loss or return_disc_loss):
-            return recon_sig
+            return recon_x
 
         # Discriminator
         if return_disc_loss:
-            recon_sig.detach_()
-            sig.requires_grad_()
+            real, fake = orig_x, recon_x.detach()
 
             real_disc_logits, fake_disc_logits = map(
                 self.discriminator,
-                (sig, recon_sig),
+                (real.requires_grad_(), fake),
             )
 
             if not self.split_disc_loss:
                 loss = self.disc_loss(fake_disc_logits, real_disc_logits)
 
                 if add_gradient_penalty:
-                    loss += gradient_penalty(sig, real_disc_logits)
+                    loss += gradient_penalty(real, loss)
 
                 if return_recons:
-                    return loss, recon_sig
+                    return loss, recon_x
                 else:
                     return loss
             else:
@@ -354,24 +354,25 @@ class VQVAE(nn.Module):
                 combined_loss = fake_loss + real_loss
 
                 if add_gradient_penalty:
-                    combined_loss += gradient_penalty(sig, real_disc_logits)
+                    combined_loss += gradient_penalty(real, combined_loss)
 
                 if return_recons:
-                    return fake_loss, real_loss, combined_loss, recon_sig
+                    return fake_loss, real_loss, combined_loss, recon_x
                 else:
                     return fake_loss, real_loss, combined_loss
 
         # Recon loss
-        recon_loss = F.mse_loss(sig, recon_sig)
+        recon_loss = F.mse_loss(orig_x, recon_x)
 
         # Generator
+        real, fake = orig_x, recon_x
         disc_intermediates = []
         (real_disc_logits, real_disc_intermediates), (
             fake_disc_logits,
             fake_disc_intermediates,
         ) = map(
             partial(self.discriminator, return_intermediates=True),
-            (sig, recon_sig),
+            (real, fake),
         )
         disc_intermediates.append((real_disc_intermediates, fake_disc_intermediates))
         gan_loss = self.gen_loss(fake_disc_logits)
@@ -404,6 +405,6 @@ class VQVAE(nn.Module):
                 commit_loss.sum(),
             )
         if return_recons:
-            return loss, recon_sig
+            return loss, recon_x
         else:
             return loss
