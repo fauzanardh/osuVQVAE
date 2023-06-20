@@ -401,7 +401,7 @@ class VQVAE(nn.Module):
                     return fake_loss, real_loss, combined_loss
 
         # Recon loss
-        recon_loss = F.mse_loss(x, recon_x)
+        recon_loss = F.l1_loss(x, recon_x)
 
         # Generator
         disc_intermediates = []
