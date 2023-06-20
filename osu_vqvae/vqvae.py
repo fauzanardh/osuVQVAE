@@ -3,14 +3,13 @@ from typing import Tuple, Union
 
 import torch
 from einops import rearrange, reduce
-from einops.layers.torch import Rearrange
 from torch import nn
 from torch.nn import functional as F
 from vector_quantize_pytorch import GroupedResidualVQ
 
-from osu_vqvae.modules.causal_convolution import CausalConv1d
+from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspose1d
 from osu_vqvae.modules.discriminator import Discriminator
-from osu_vqvae.modules.scaler import DownsampleLinear, UpsampleLinear
+from osu_vqvae.modules.residual import ResidualBlock
 from osu_vqvae.modules.transformer import LocalTransformerBlock
 from osu_vqvae.modules.utils import gradient_penalty, log
 
@@ -47,6 +46,23 @@ def hinge_generator_loss(fake: torch.Tensor) -> torch.Tensor:
     return -fake.mean()
 
 
+class EncoderBlock(nn.Sequential):
+    def __init__(
+        self: "EncoderBlock",
+        dim_in: int,
+        dim_out: int,
+        stride: int,
+        dilations: Tuple[int] = (1, 3, 9),
+        squeeze_excite: bool = False,
+    ) -> None:
+        super().__init__(
+            ResidualBlock(dim_in, dim_in, dilations[0], squeeze_excite=squeeze_excite),
+            ResidualBlock(dim_in, dim_in, dilations[1], squeeze_excite=squeeze_excite),
+            ResidualBlock(dim_in, dim_in, dilations[2], squeeze_excite=squeeze_excite),
+            CausalConv1d(dim_in, dim_out, 2 * stride, stride=stride),
+        )
+
+
 class EncoderAttn(nn.Module):
     def __init__(
         self: "EncoderAttn",
@@ -55,7 +71,8 @@ class EncoderAttn(nn.Module):
         dim_emb: int,
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
         strides: Tuple[int] = (2, 2, 2, 2),
-        attn_depths: Tuple[int] = (2, 2, 2, 4),
+        res_dilations: Tuple[int] = (1, 3, 9),
+        attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 256,
@@ -73,51 +90,78 @@ class EncoderAttn(nn.Module):
         in_out = tuple(zip(dims_h[:-1], dims_h[1:]))
         num_layers = len(in_out)
 
-        self.init_conv = CausalConv1d(dim_in, dim_h, 7)
-        self.pre_quant = nn.Sequential(
-            CausalConv1d(dims_h[-1], dim_emb, 3),
-            Rearrange("b c l -> b l c"),
-            nn.LayerNorm(dim_emb),
-        )
-
         # Down
-        self.downs = nn.ModuleList([])
+        encoder_blocks = []
         for ind in range(num_layers):
             layer_dim_in, layer_dim_out = in_out[ind]
             stride = strides[ind]
-            attn_depth = attn_depths[ind]
-            self.downs.append(
-                nn.ModuleList(
-                    [
-                        DownsampleLinear(layer_dim_in, layer_dim_out, stride),
-                        LocalTransformerBlock(
-                            dim=layer_dim_out,
-                            depth=attn_depth,
-                            heads=attn_heads,
-                            dim_head=attn_dim_head,
-                            window_size=attn_window_size,
-                            dynamic_pos_bias=attn_dynamic_pos_bias,
-                            alibi_pos_bias=attn_alibi_pos_bias,
-                        ),
-                    ],
+            encoder_blocks.append(
+                EncoderBlock(
+                    layer_dim_in,
+                    layer_dim_out,
+                    stride,
+                    dilations=res_dilations,
                 ),
             )
 
+        self.downs = nn.Sequential(
+            CausalConv1d(dim_in, dim_h, 7),
+            *encoder_blocks,
+            CausalConv1d(dims_h[-1], dim_emb, 3),
+        )
+        self.attn = LocalTransformerBlock(
+            dim=dim_emb,
+            depth=attn_depth,
+            heads=attn_heads,
+            dim_head=attn_dim_head,
+            window_size=attn_window_size,
+            dynamic_pos_bias=attn_dynamic_pos_bias,
+            alibi_pos_bias=attn_alibi_pos_bias,
+        )
+
     def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
-        x = self.init_conv(x)
+        # Downs
+        x = self.downs(x)
 
         # Rearrange to (batch, length, channels)
         x = rearrange(x, "b c l -> b l c")
 
-        # Down
-        for downsample, attn_block in self.downs:
-            x = downsample(x)
-            x = attn_block(x)
+        # Attn
+        x = self.attn(x)
 
-        # Rearrange to (batch, channels, length)
-        x = rearrange(x, "b l c -> b c l")
+        return x
 
-        return self.pre_quant(x)
+
+class DecoderBlock(nn.Sequential):
+    def __init__(
+        self: "DecoderBlock",
+        dim_in: int,
+        dim_out: int,
+        stride: int,
+        dilations: Tuple[int] = (1, 3, 9),
+        squeeze_excite: bool = False,
+    ) -> None:
+        super().__init__(
+            CausalConvTranspose1d(dim_in, dim_out, 2 * stride, stride=stride),
+            ResidualBlock(
+                dim_out,
+                dim_out,
+                dilations[0],
+                squeeze_excite=squeeze_excite,
+            ),
+            ResidualBlock(
+                dim_out,
+                dim_out,
+                dilations[1],
+                squeeze_excite=squeeze_excite,
+            ),
+            ResidualBlock(
+                dim_out,
+                dim_out,
+                dilations[2],
+                squeeze_excite=squeeze_excite,
+            ),
+        )
 
 
 class DecoderAttn(nn.Module):
@@ -128,7 +172,8 @@ class DecoderAttn(nn.Module):
         dim_emb: int,
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
         strides: Tuple[int] = (2, 2, 2, 2),
-        attn_depths: Tuple[int] = (2, 2, 2, 4),
+        res_dilations: Tuple[int] = (1, 3, 9),
+        attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 256,
@@ -147,56 +192,47 @@ class DecoderAttn(nn.Module):
         dims_h = tuple((dim_h * m for m in dim_h_mult))
         dims_h = (dim_h, *dims_h)
         strides = tuple(reversed(strides))
-        attn_depths = tuple(reversed(attn_depths))
         in_out = reversed(tuple(zip(dims_h[:-1], dims_h[1:])))
         in_out = tuple(in_out)
         num_layers = len(in_out)
 
-        self.pre_conv = CausalConv1d(dim_emb, dims_h[-1], 7)
-        self.to_logits = nn.Sequential(
-            nn.LayerNorm(dim_h),
-            Rearrange("b l c -> b c l"),
-            CausalConv1d(dim_h, dim_in, 3),
-        )
-
         # Up
-        self.ups = nn.ModuleList([])
+        decoder_blocks = []
         for ind in range(num_layers):
             layer_dim_out, layer_dim_in = in_out[ind]
             stride = strides[ind]
-            attn_depth = attn_depths[ind]
-            self.ups.append(
-                nn.ModuleList(
-                    [
-                        UpsampleLinear(layer_dim_in, layer_dim_out, stride),
-                        LocalTransformerBlock(
-                            dim=layer_dim_out,
-                            depth=attn_depth,
-                            heads=attn_heads,
-                            dim_head=attn_dim_head,
-                            window_size=attn_window_size,
-                            dynamic_pos_bias=attn_dynamic_pos_bias,
-                            alibi_pos_bias=attn_alibi_pos_bias,
-                        ),
-                    ],
+            decoder_blocks.append(
+                DecoderBlock(
+                    layer_dim_in,
+                    layer_dim_out,
+                    stride,
+                    dilations=res_dilations,
                 ),
             )
+        self.attn = LocalTransformerBlock(
+            dim=dim_emb,
+            depth=attn_depth,
+            heads=attn_heads,
+            dim_head=attn_dim_head,
+            window_size=attn_window_size,
+            dynamic_pos_bias=attn_dynamic_pos_bias,
+            alibi_pos_bias=attn_alibi_pos_bias,
+        )
+        self.ups = nn.Sequential(
+            CausalConv1d(dim_emb, dims_h[-1], 7),
+            *decoder_blocks,
+            CausalConv1d(dims_h[0], dim_in, 7),
+        )
 
     def forward(self: "DecoderAttn", x: torch.Tensor) -> torch.Tensor:
+        # Attn
+        x = self.attn(x)
+
         # Rearrange to (batch, channels, length)
         x = rearrange(x, "b l c -> b c l")
-        x = self.pre_conv(x)
 
-        # Rearrange to (batch, length, channels)
-        x = rearrange(x, "b c l -> b l c")
-
-        # Up
-        for upsample, attn_block in self.ups:
-            x = upsample(x)
-            x = attn_block(x)
-
-        # Rearrange to (batch, channels, length)
-        x = self.to_logits(x)
+        # Ups
+        x = self.ups(x)
 
         return torch.tanh(x) if self.use_tanh else x
 
@@ -210,7 +246,8 @@ class VQVAE(nn.Module):
         n_emb: int,
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
         strides: Tuple[int] = (2, 2, 2, 2),
-        attn_depths: Tuple[int] = (2, 2, 2, 4),
+        res_dilations: Tuple[int] = (1, 3, 9),
+        attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_window_size: int = 256,
@@ -242,7 +279,8 @@ class VQVAE(nn.Module):
             dim_emb=dim_emb,
             dim_h_mult=dim_h_mult,
             strides=strides,
-            attn_depths=attn_depths,
+            res_dilations=res_dilations,
+            attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
@@ -269,7 +307,8 @@ class VQVAE(nn.Module):
             dim_emb=dim_emb,
             dim_h_mult=dim_h_mult,
             strides=strides,
-            attn_depths=attn_depths,
+            res_dilations=res_dilations,
+            attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_window_size=attn_window_size,
