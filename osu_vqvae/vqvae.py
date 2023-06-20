@@ -321,7 +321,6 @@ class VQVAE(nn.Module):
         return_recons: float = True,
         add_gradient_penalty: float = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        orig_x = x.clone()
         quantized, _, commit_loss = self.encode(x)
         recon_x = self.decode(quantized)
 
@@ -330,18 +329,19 @@ class VQVAE(nn.Module):
 
         # Discriminator
         if return_disc_loss:
-            real, fake = orig_x, recon_x.detach()
+            recon_x.detach_()
+            x.requires_grad_()
 
             real_disc_logits, fake_disc_logits = map(
                 self.discriminator,
-                (real.requires_grad_(), fake),
+                (x, recon_x),
             )
 
             if not self.split_disc_loss:
                 loss = self.disc_loss(fake_disc_logits, real_disc_logits)
 
                 if add_gradient_penalty:
-                    loss += gradient_penalty(real, loss)
+                    loss += gradient_penalty(x, real_disc_logits)
 
                 if return_recons:
                     return loss, recon_x
@@ -354,7 +354,7 @@ class VQVAE(nn.Module):
                 combined_loss = fake_loss + real_loss
 
                 if add_gradient_penalty:
-                    combined_loss += gradient_penalty(real, combined_loss)
+                    combined_loss += gradient_penalty(x, real_disc_logits)
 
                 if return_recons:
                     return fake_loss, real_loss, combined_loss, recon_x
@@ -362,17 +362,16 @@ class VQVAE(nn.Module):
                     return fake_loss, real_loss, combined_loss
 
         # Recon loss
-        recon_loss = F.mse_loss(orig_x, recon_x)
+        recon_loss = F.mse_loss(x, recon_x)
 
         # Generator
-        real, fake = orig_x, recon_x
         disc_intermediates = []
         (real_disc_logits, real_disc_intermediates), (
             fake_disc_logits,
             fake_disc_intermediates,
         ) = map(
             partial(self.discriminator, return_intermediates=True),
-            (real, fake),
+            (x, recon_x),
         )
         disc_intermediates.append((real_disc_intermediates, fake_disc_intermediates))
         gan_loss = self.gen_loss(fake_disc_logits)
