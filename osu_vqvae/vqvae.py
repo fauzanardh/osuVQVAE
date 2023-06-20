@@ -262,6 +262,7 @@ class VQVAE(nn.Module):
         discriminator_layers: int = 4,
         use_tanh: bool = False,
         use_hinge_loss: bool = False,
+        use_l1_loss: bool = False,
         split_disc_loss: bool = False,
         recon_loss_weight: float = 1.0,
         gan_loss_weight: float = 1.0,
@@ -316,6 +317,7 @@ class VQVAE(nn.Module):
             attn_alibi_pos_bias=attn_alibi_pos_bias,
             use_tanh=use_tanh,
         )
+        self.recon_loss = F.l1_loss if use_l1_loss else F.mse_loss
 
         # Discriminator
         layer_mults = [2**i for i in range(discriminator_layers)]
@@ -400,8 +402,27 @@ class VQVAE(nn.Module):
                 else:
                     return fake_loss, real_loss, combined_loss
 
-        # Recon loss
-        recon_loss = F.l1_loss(x, recon_x)
+        # Compound recon loss from each signals
+        # recon_loss = self.recon_loss(x, recon_x)
+        hits_recon_loss = self.recon_loss(x[:, 0], recon_x[:, 0])
+        slider_holds_recon_loss = self.recon_loss(x[:, 1], recon_x[:, 1])
+        spinner_holds_recon_loss = self.recon_loss(x[:, 2], recon_x[:, 2])
+        new_combo_recon_loss = self.recon_loss(x[:, 3], recon_x[:, 3])
+        slider_slides_recon_loss = self.recon_loss(x[:, 4], recon_x[:, 4])
+        slider_bezier_bounds_recon_loss = self.recon_loss(x[:, 5], recon_x[:, 5])
+        cursor_x_recon_loss = self.recon_loss(x[:, 6], recon_x[:, 6])
+        cursor_y_recon_loss = self.recon_loss(x[:, 7], recon_x[:, 7])
+
+        recon_loss = (
+            hits_recon_loss
+            + slider_holds_recon_loss
+            + spinner_holds_recon_loss
+            + new_combo_recon_loss
+            + slider_slides_recon_loss
+            + slider_bezier_bounds_recon_loss
+            + cursor_x_recon_loss
+            + cursor_y_recon_loss
+        )
 
         # Generator
         disc_intermediates = []
