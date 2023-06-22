@@ -46,7 +46,7 @@ SliderTickRate: 1
 
 def to_sorted_hits(
     hit_signal: npt.ArrayLike,
-) -> List[Tuple[npt.ArrayLike, npt.ArrayLike, int, bool]]:
+) -> List[Tuple[int, int, int, bool]]:
     """
     returns a list of tuples representing each hit object sorted by start:
         `(start_idx, end_idx, object_type, new_combo)`
@@ -106,7 +106,7 @@ def to_playfield_coordinates(cursor_signal: npt.ArrayLike) -> npt.ArrayLike:
     # pad so that the cursor isn't too close to the edges of the screen
     # padding = 0.
     # cursor_signal = padding + cursor_signal * (1 - 2*padding)
-    return (cursor_signal + 1) / 2 * np.array([[512], [384]])
+    return cursor_signal * np.array([[512], [384]])
 
 
 def to_slider_decoder(
@@ -120,28 +120,22 @@ def to_slider_decoder(
     - number of slides
     - slider control points
     """
-    repeat_sig, seg_boundary_sig = slider_signal
+    repeat_idxs = np.zeros_like(frame_times)
+    repeat_idxs[decode_hit(slider_signal[0])] = 1
 
-    repeat_idxs = decode_hit(repeat_sig)
-    seg_boundary_idxs = decode_hit(seg_boundary_sig)
-
-    def decoder(a: int, b: int) -> Tuple[float, int, npt.ArrayLike]:
-        repeat_idx_in_range = [r for r in repeat_idxs if a < r < b]
-        if len(repeat_idx_in_range) == 0:
-            slides = 1
-        else:
-            r = repeat_idx_in_range[0]
-            slides = round((b - a) / (r - a))
-
-        r = round(a + (b - a) / slides)
+    def decoder(a: int, b: int) -> Tuple[float, int, List[int]]:
+        slides = int(sum(repeat_idxs[a : b + 1]) + 1)
         ctrl_pts = []
         length = 0
-        sb_idxs = [s for s in seg_boundary_idxs if a < s < r]
-        for seg_start, seg_end in zip([a, *sb_idxs], [*sb_idxs, r]):
-            for b in fit_bezier(cursor_signal.T[seg_start : seg_end + 1], max_err=100):
-                b = np.array(b).round().astype(int)
-                ctrl_pts.extend(b)
-                length += bezier.Curve.from_nodes(b.T).length
+        full_slider = cursor_signal.T[a : b + 1]
+        seg_slider = full_slider[
+            : np.ceil(full_slider.shape[0] / slides).astype(np.int32)
+        ]
+        for bez in fit_bezier(seg_slider, max_err=50):
+            bez = np.array(bez).round().astype(np.int32)
+            ctrl_pts.extend(bez)
+            length += bezier.Curve.from_nodes(bez.T).length
+
         return length, slides, ctrl_pts
 
     return decoder
@@ -156,15 +150,12 @@ def to_beatmap(  # noqa: C901
     """
     returns the beatmap as the string contents of the beatmap file
     """
-
-    # ignore auxilliary signals
-    sig = sig[6:]
+    # change range from [-1,1] to [0,1]
+    sig = (sig + 1) / 2
 
     hit_signal, sig = np.split(sig, (4,))
-    slider_signal, sig = np.split(sig, (2,))
+    slider_signal, sig = np.split(sig, (1,))
     cursor_signal, sig = np.split(sig, (2,))
-    assert sig.shape[0] == 0
-
     # process hit signal
     sorted_hits = to_sorted_hits(hit_signal)
 
@@ -192,7 +183,7 @@ def to_beatmap(  # noqa: C901
         # x = np.linspace(0,20,1000)
         # timing_beat_len = np.exp(x[diff_dist(x).argmax()])
 
-        beat_snap, timing_points = False, [TimingPoint(0, 60000 / 200, None, 4, None)]
+        beat_snap, timing_points = False, [TimingPoint(0, 1000, None, 4, None)]
     elif isinstance(timing, (int, float)):
         timing_beat_len = 60.0 * 1000.0 / float(timing)
         # compute timing offset
@@ -200,13 +191,13 @@ def to_beatmap(  # noqa: C901
             [frame_times[i] % timing_beat_len for i, _, _, _ in sorted_hits],
         )
         offset = (
-            offset_dist.pdf(np.linspace(0, timing_beat_len, 1000)).argmax()
+            offset_dist.evaluate(np.linspace(0, timing_beat_len, 1000)).argmax()
             / 1000.0
             * timing_beat_len
         )
 
         beat_snap, timing_points = True, [
-            TimingPoint(offset, timing_beat_len, None, 4, None),
+            TimingPoint(np.ceil(offset), timing_beat_len, None, 8, None),
         ]
 
     hos = []  # hit objects
@@ -222,7 +213,7 @@ def to_beatmap(  # noqa: C901
     beat_offset = timing_points[0].t
 
     def add_hit_circle(i: int, j: int, t: int, u: int, new_combo: bool) -> None:
-        x, y = cursor_signal[:, i].round().astype(int)
+        x, y = cursor_signal[:, i].round().astype(np.int32)
         hos.append(f"{x},{y},{t},{1 + new_combo},0,0:0:0:0:")
 
     def add_spinner(i: int, j: int, t: int, u: int, new_combo: bool) -> None:
@@ -243,11 +234,6 @@ def to_beatmap(  # noqa: C901
             return add_hit_circle(i, j, t, u, new_combo)
 
         _sv = length * slides / (u - t) / base_slider_vel
-        if _sv > 10 or _sv < 0.1:
-            print(
-                "warning: SV > 10 or SV < .1 not supported, will result in bad sliders:",
-                _sv,
-            )
 
         x1, y1 = ctrl_pts[0]
         curve_pts = "|".join(f"{x}:{y}" for x, y in ctrl_pts[1:])
@@ -270,7 +256,7 @@ def to_beatmap(  # noqa: C901
         t, u = int(t), int(u)
 
         # add timing points
-        if len(timing_points) > 0 and t > timing_points[0].t:
+        if len(timing_points) > 0 and t >= timing_points[0].t:
             tp = timing_points.pop(0)
             tps.append(f"{tp.t},{tp.beat_length},{tp.meter},0,0,50,1,0")
             beat_length = tp.beat_length

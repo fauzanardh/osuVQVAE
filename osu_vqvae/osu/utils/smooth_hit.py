@@ -1,64 +1,61 @@
-from typing import List
+from typing import List, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
 import scipy
 
 # std dev of impulse indicating a hit
-HIT_SD = 3
+HIT_SD = 5
 
 
-def sigmoid(x: npt.ArrayLike) -> npt.ArrayLike:
-    """1/(e^-x + 1)"""
-    return np.exp(-np.logaddexp(-x, 0))
+def smooth_hit(
+    x: npt.ArrayLike,
+    mu: Union[int, float, Tuple[float, float]],
+    sigma: float = HIT_SD,
+) -> npt.ArrayLike:
+    if isinstance(mu, (float, int)):
+        z = (x - mu) / sigma
+    elif isinstance(mu, tuple):
+        start, end = mu
+        z = np.where(x < start, x - start, np.where(x < end, 0, x - end)) / sigma
+    else:
+        msg = f"mu must be float or tuple, not {type(mu)}"
+        raise TypeError(msg)
+
+    return np.exp(-0.5 * z**2)
 
 
-def encode_hit(sig: npt.ArrayLike, frame_times: npt.ArrayLike, i: float) -> None:
-    z = (frame_times - i) / HIT_SD
-
-    # hits are impulses
-    # sig += 2 * np.exp(-.5 * z**2)
-
-    # hits are flips
-    sig *= 1 - 2 * sigmoid(z)
+_feature_bound = max(2, HIT_SD * 6)
+_feature = smooth_hit(np.arange(-_feature_bound, _feature_bound + 1), 0)
 
 
-def encode_hold(
+def _decode(
     sig: npt.ArrayLike,
-    frame_times: npt.ArrayLike,
-    i: float,
-    j: float,
-) -> None:
-    m = 2 * sigmoid((j - i) / 2 / HIT_SD) - 1  # maximum value at (j-i)/2
-    sig += (
-        2
-        * (sigmoid((frame_times - i) / HIT_SD) - sigmoid((frame_times - j) / HIT_SD))
-        / m
-    )
+    peak_h: float,
+    hit_offset: Union[int, float],
+) -> npt.ArrayLike:
+    correlation = scipy.signal.correlate(sig, _feature, mode="same")
+    hit_peaks = scipy.signal.find_peaks(correlation, height=peak_h)[0] + hit_offset
+    return hit_peaks.astype(np.int32).tolist()
 
 
-def flips(sig: npt.ArrayLike) -> List[npt.ArrayLike]:
+def decode_hit(sig: npt.ArrayLike) -> List[int]:
+    return _decode(sig, peak_h=0.5, hit_offset=0)
+
+
+def decode_hold(sig: npt.ArrayLike) -> List[int]:
     sig_grad = np.gradient(sig)
-    return (
-        scipy.signal.find_peaks(sig_grad, height=0.5)[0].astype(int),
-        scipy.signal.find_peaks(-sig_grad, height=0.5)[0].astype(int),
-    )
+    start_sig = np.maximum(0, sig_grad)
+    end_sig = -np.minimum(0, sig_grad)
 
-
-def decode_hit(sig: npt.ArrayLike) -> List[npt.ArrayLike]:
-    rising, falling = flips(sig)
-    return sorted([*rising, *falling])
-
-
-def decode_hold(sig: npt.ArrayLike) -> List[npt.ArrayLike]:
-    rising, falling = flips(sig)
-    start_idxs, end_idxs = list(rising), list(falling)
+    start_idxs = _decode(start_sig, peak_h=0.25, hit_offset=1)
+    end_idxs = _decode(end_sig, peak_h=0.25, hit_offset=-1)
 
     # ensure that first start is before first end
     while len(start_idxs) and len(end_idxs) and start_idxs[0] >= end_idxs[0]:
         end_idxs.pop(0)
 
-    # ensure that there is one end for every start
+    # ensure that there is one end for each start
     if len(start_idxs) > len(end_idxs):
         start_idxs = start_idxs[: len(end_idxs) - len(start_idxs)]
     elif len(end_idxs) > len(start_idxs):
