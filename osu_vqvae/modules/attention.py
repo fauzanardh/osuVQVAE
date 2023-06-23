@@ -1,5 +1,8 @@
+from functools import partial
+
 import torch
 from einops import rearrange
+from local_attention import LocalAttention
 from torch import nn
 from torch.nn import functional as F
 
@@ -55,6 +58,71 @@ class Attention(nn.Module):
             )
 
         out = rearrange(out, "b h n d -> b n (h d)")
+        return self.to_out(out)
+
+
+class ConvLocalAttention(nn.Module):
+    def __init__(
+        self: "ConvLocalAttention",
+        dim: int,
+        window_size: int,
+        heads: int = 8,
+        dim_head: int = 64,
+        causal: bool = False,
+        prenorm: bool = False,
+        qk_rmsnorm: bool = False,
+        qk_scale: int = 8,
+        use_xpos: bool = False,
+        xpos_scale_base: int = None,
+        exact_window: bool = True,
+        **kwargs: dict,
+    ) -> None:
+        super().__init__()
+        self.heads = heads
+        self.norm = nn.GroupNorm(1, dim) if prenorm else nn.Identity()
+
+        inner_dim = dim_head * heads
+        self.to_qkv = nn.Conv1d(dim, inner_dim * 3, 1, bias=False)
+
+        self.qk_rmsnorm = qk_rmsnorm
+        if self.qk_rmsnorm:
+            self.q_scale = nn.Parameter(torch.ones(dim_head))
+            self.k_scale = nn.Parameter(torch.ones(dim_head))
+
+        self.attn_fn = LocalAttention(
+            dim=dim_head,
+            window_size=window_size,
+            causal=causal,
+            autopad=True,
+            scale=(qk_scale if self.qk_rmsnorm else None),
+            exact_windowsize=exact_window,
+            use_xpos=use_xpos,
+            xpos_scale_base=xpos_scale_base,
+            **kwargs,
+        )
+
+        self.to_out = nn.Conv1d(inner_dim, dim, 1, bias=False)
+
+    def forward(
+        self: "ConvLocalAttention",
+        x: torch.Tensor,
+        mask: torch.Tensor = None,
+        attn_bias: torch.Tensor = None,
+    ) -> torch.Tensor:
+        x = self.norm(x)
+
+        q, k, v = self.to_qkv(x).chunk(3, dim=-2)
+        q, k, v = (
+            rearrange(t, "b (h d) n -> b h n d", h=self.heads) for t in (q, k, v)
+        )
+
+        if self.qk_rmsnorm:
+            q, k = map(partial(F.normalize, dim=-1), (q, k))
+            q *= self.q_scale
+            k *= self.k_scale
+
+        out = self.attn_fn(q, k, v, mask=mask, attn_bias=attn_bias)
+        out = rearrange(out, "b h n d -> b (h d) n")
         return self.to_out(out)
 
 

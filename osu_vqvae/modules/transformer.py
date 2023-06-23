@@ -7,7 +7,7 @@ from local_attention import DynamicPositionBias, LocalMHA
 from torch import nn
 from torch.nn import functional as F
 
-from osu_vqvae.modules.attention import Attention
+from osu_vqvae.modules.attention import Attention, ConvLocalAttention
 from osu_vqvae.modules.utils import pad_at_dim
 
 
@@ -21,6 +21,34 @@ class GEGLU(nn.Module):
     def forward(self: "GEGLU", x: torch.Tensor) -> torch.Tensor:
         x, gate = x.chunk(2, dim=-1)
         return x * F.gelu(gate)
+
+
+class ConvGEGLU(nn.Module):
+    def forward(self: "GEGLU", x: torch.Tensor) -> torch.Tensor:
+        x, gate = x.chunk(2, dim=-2)
+        return x * F.gelu(gate)
+
+
+class FeedForward(nn.Sequential):
+    def __init__(self: "FeedForward", dim: int, mult: int = 4) -> None:
+        hidden_dim = int(dim * mult * 2 / 3)
+        super().__init__(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, hidden_dim * 2),
+            GEGLU(),
+            nn.Linear(hidden_dim, dim),
+        )
+
+
+class ConvFeedForward(nn.Sequential):
+    def __init__(self: "ConvFeedForward", dim: int, mult: int = 4) -> None:
+        hidden_dim = int(dim * mult * 2 / 3)
+        super().__init__(
+            nn.GroupNorm(1, dim),
+            nn.Conv1d(dim, hidden_dim * 2, 1),
+            ConvGEGLU(),
+            nn.Conv1d(hidden_dim, dim, 1),
+        )
 
 
 class AlibiPositionalBias(nn.Module):
@@ -122,21 +150,6 @@ class LearnedAlibiPositionalBias(AlibiPositionalBias):
         return bias
 
 
-class FeedForward(nn.Module):
-    def __init__(self: "FeedForward", dim: int, mult: int = 4) -> None:
-        super().__init__()
-        hidden_dim = int(dim * mult * 2 / 3)
-        self.layers = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, hidden_dim * 2),
-            GEGLU(),
-            nn.Linear(hidden_dim, dim),
-        )
-
-    def forward(self: "FeedForward", x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
-
-
 class TransformerBlock(nn.Module):
     def __init__(
         self: "TransformerBlock",
@@ -213,6 +226,65 @@ class LocalTransformerBlock(nn.Module):
             )
 
     def forward(self: "LocalTransformerBlock", x: torch.Tensor) -> torch.Tensor:
+        attn_bias = None
+        if self.rel_pos is not None:
+            attn_bias = self.rel_pos(self.ws, self.ws * 2)
+
+        for attn, ff in self.layers:
+            x = attn(shift_token(x), attn_bias=attn_bias) + x
+            x = ff(shift_token(x)) + x
+        return x
+
+
+class ConvLocalTransformerBlock(nn.Module):
+    def __init__(
+        self: "ConvLocalTransformerBlock",
+        dim: int,
+        depth: int = 1,
+        heads: int = 8,
+        dim_head: int = 64,
+        window_size: int = 512,
+        dynamic_pos_bias: bool = False,
+        alibi_pos_bias: bool = False,
+    ) -> None:
+        super().__init__()
+        self.ws = window_size
+        self.rel_pos = None
+
+        if dynamic_pos_bias:
+            self.rel_pos = DynamicPositionBias(
+                dim=dim // 2,
+                heads=heads,
+            )
+        elif alibi_pos_bias:
+            self.rel_pos = AlibiPositionalBias(
+                heads=heads,
+            )
+        else:
+            self.rel_pos = None
+
+        self.layers = nn.ModuleList([])
+        for _ in range(depth):
+            self.layers.append(
+                nn.ModuleList(
+                    [
+                        ConvLocalAttention(
+                            dim=dim,
+                            heads=heads,
+                            dim_head=dim_head,
+                            qk_rmsnorm=True,
+                            window_size=window_size,
+                            use_rotary_pos_emb=self.rel_pos is None,
+                            use_xpos=True,
+                            prenorm=True,
+                            causal=True,
+                        ),
+                        ConvFeedForward(dim),
+                    ],
+                ),
+            )
+
+    def forward(self: "ConvLocalTransformerBlock", x: torch.Tensor) -> torch.Tensor:
         attn_bias = None
         if self.rel_pos is not None:
             attn_bias = self.rel_pos(self.ws, self.ws * 2)
