@@ -85,7 +85,10 @@ class SubsequenceDataset(StreamPerSample):
         self: "SubsequenceDataset",
         map_file: str,
     ) -> Generator[torch.Tensor, None, None]:
-        x = load_tensor(map_file)
+        try:
+            x = load_tensor(map_file)
+        except Exception:
+            return
         n = x.shape[-1]
 
         if self.seq_len >= n:
