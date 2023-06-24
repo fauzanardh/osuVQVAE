@@ -59,7 +59,7 @@ class EncoderAttn(nn.Module):
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 256,
+        attn_window_size: int = 512,
         attn_dynamic_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
     ) -> None:
@@ -160,7 +160,7 @@ class DecoderAttn(nn.Module):
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 256,
+        attn_window_size: int = 512,
         attn_dynamic_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
         use_tanh: bool = False,
@@ -234,7 +234,7 @@ class VQVAE(nn.Module):
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 256,
+        attn_window_size: int = 512,
         attn_dynamic_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
         vq_num_codebooks: int = 8,
@@ -327,7 +327,7 @@ class VQVAE(nn.Module):
     def forward(
         self: "VQVAE",
         x: torch.Tensor,
-        seperate_loss: bool = False,
+        separate_loss: bool = False,
         return_loss: float = False,
         return_disc_loss: float = False,
         return_recons: float = True,
@@ -387,7 +387,7 @@ class VQVAE(nn.Module):
             feature_losses.extend(losses)
         feature_loss = torch.stack(feature_losses).mean()
 
-        if not seperate_loss:
+        if not separate_loss:
             loss = (
                 recon_loss * self.recon_loss_weight
                 + gan_loss * self.gan_loss_weight
