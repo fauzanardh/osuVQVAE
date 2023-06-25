@@ -5,7 +5,7 @@ import numpy.typing as npt
 import scipy
 
 # std dev of impulse indicating a hit
-HIT_SD = 3
+HIT_SD = 5
 
 
 def smooth_hit(
@@ -25,7 +25,7 @@ def smooth_hit(
     return np.exp((-0.5 * z**2).astype(np.float))
 
 
-_feature_bound = max(2, HIT_SD * 4)
+_feature_bound = max(2, HIT_SD * 6)
 _feature = smooth_hit(np.arange(-_feature_bound, _feature_bound + 1), 0)
 
 
