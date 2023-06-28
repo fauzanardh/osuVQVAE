@@ -359,7 +359,13 @@ class VQVAE(nn.Module):
             else:
                 return loss
 
-        losses = [self.recon_loss(x[:, i], recon_x[:, i]) for i in range(self.dim_in)]
+        # losses = [self.recon_loss(x[:, i], recon_x[:, i]) for i in range(self.dim_in)]
+        losses = []
+        for i in range(self.dim_in):
+            if i in [3, 4]:  # new combo, slides
+                losses.append(self.recon_loss(x[:, i], recon_x[:, i]) * 10)
+            else:
+                losses.append(self.recon_loss(x[:, i], recon_x[:, i]))
         recon_loss = torch.stack(losses).sum()
 
         # Generator
