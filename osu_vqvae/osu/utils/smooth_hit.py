@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -26,8 +26,8 @@ def encode_hit(sig: npt.ArrayLike, frame_times: npt.ArrayLike, i: float) -> None
 def encode_hold(
     sig: npt.ArrayLike,
     frame_times: npt.ArrayLike,
-    i: float,
-    j: float,
+    i: Union[float, int],
+    j: Union[float, int],
 ) -> None:
     m = 2 * sigmoid((j - i) / 2 / HIT_SD) - 1  # maximum value at (j-i)/2
     sig += (
@@ -40,8 +40,8 @@ def encode_hold(
 def flips(sig: npt.ArrayLike) -> List[npt.ArrayLike]:
     sig_grad = np.gradient(sig)
     return (
-        scipy.signal.find_peaks(sig_grad, height=0.5)[0].astype(int),
-        scipy.signal.find_peaks(-sig_grad, height=0.5)[0].astype(int),
+        scipy.signal.find_peaks(sig_grad, height=0.5)[0].astype(np.int32),
+        scipy.signal.find_peaks(-sig_grad, height=0.5)[0].astype(np.int32),
     )
 
 

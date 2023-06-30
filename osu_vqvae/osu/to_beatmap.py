@@ -120,28 +120,28 @@ def to_slider_decoder(
     - number of slides
     - slider control points
     """
-    repeat_sig, seg_boundary_sig = slider_signal
+    repeat_sig = slider_signal[0]
 
     repeat_idxs = decode_hit(repeat_sig)
-    seg_boundary_idxs = decode_hit(seg_boundary_sig)
 
     def decoder(a: int, b: int) -> Tuple[float, int, npt.ArrayLike]:
         repeat_idx_in_range = [r for r in repeat_idxs if a < r < b]
-        if len(repeat_idx_in_range) == 0:
-            slides = 1
-        else:
+        if len(repeat_idx_in_range):
             r = repeat_idx_in_range[0]
             slides = round((b - a) / (r - a))
+        else:
+            slides = 1
 
-        r = round(a + (b - a) / slides)
-        ctrl_pts = []
         length = 0
-        sb_idxs = [s for s in seg_boundary_idxs if a < s < r]
-        for seg_start, seg_end in zip([a, *sb_idxs], [*sb_idxs, r]):
-            for b in fit_bezier(cursor_signal.T[seg_start : seg_end + 1], max_err=100):
-                b = np.array(b).round().astype(int)
-                ctrl_pts.extend(b)
-                length += bezier.Curve.from_nodes(b.T).length
+        ctrl_pts = []
+        full_slider = cursor_signal.T[a : b + 1]
+        seg_slider = full_slider[
+            : np.ceil(full_slider.shape[0] / slides).astype(np.int32)
+        ]
+        for _bezier in fit_bezier(seg_slider, max_err=50):
+            _bezier = np.array(_bezier).round().astype(np.int32)
+            ctrl_pts.extend(_bezier)
+            length += bezier.Curve.from_nodes(_bezier.T).length
         return length, slides, ctrl_pts
 
     return decoder
@@ -157,11 +157,8 @@ def to_beatmap(  # noqa: C901
     returns the beatmap as the string contents of the beatmap file
     """
 
-    # ignore auxilliary signals
-    sig = sig[6:]
-
     hit_signal, sig = np.split(sig, (4,))
-    slider_signal, sig = np.split(sig, (2,))
+    slider_signal, sig = np.split(sig, (1,))
     cursor_signal, sig = np.split(sig, (2,))
     assert sig.shape[0] == 0
 
@@ -222,7 +219,7 @@ def to_beatmap(  # noqa: C901
     beat_offset = timing_points[0].t
 
     def add_hit_circle(i: int, j: int, t: int, u: int, new_combo: bool) -> None:
-        x, y = cursor_signal[:, i].round().astype(int)
+        x, y = cursor_signal[:, i].round().astype(np.int32)
         hos.append(f"{x},{y},{t},{1 + new_combo},0,0:0:0:0:")
 
     def add_spinner(i: int, j: int, t: int, u: int, new_combo: bool) -> None:
