@@ -252,6 +252,7 @@ class VQVAE(nn.Module):
         feature_loss_weight: float = 0.0,
     ) -> None:
         super().__init__()
+        self.dim_in = dim_in
         self.recon_loss_weight = recon_loss_weight
         self.gan_loss_weight = gan_loss_weight
         self.feature_loss_weight = feature_loss_weight
