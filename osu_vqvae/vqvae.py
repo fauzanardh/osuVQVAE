@@ -47,27 +47,19 @@ class EncoderBlock(nn.Sequential):
         )
 
 
-class EncoderAttn(nn.Module):
+class Encoder(nn.Module):
     def __init__(
-        self: "EncoderAttn",
+        self: "Encoder",
         dim_in: int,
         dim_h: int,
         dim_emb: int,
+        *,
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
         strides: Tuple[int] = (2, 2, 2, 2),
         res_dilations: Tuple[int] = (1, 3, 9),
-        attn_depth: int = 2,
-        attn_heads: int = 8,
-        attn_dim_head: int = 64,
-        attn_window_size: int = 512,
-        attn_dynamic_pos_bias: bool = False,
-        attn_alibi_pos_bias: bool = False,
+        **kwargs: dict,
     ) -> None:
         super().__init__()
-
-        assert not (
-            attn_dynamic_pos_bias and attn_alibi_pos_bias
-        ), "Cannot have both dynamic and alibi positional bias"
 
         dims_h = tuple((dim_h * m for m in dim_h_mult))
         dims_h = (dim_h, *dims_h)
@@ -93,6 +85,47 @@ class EncoderAttn(nn.Module):
             *encoder_blocks,
             CausalConv1d(dims_h[-1], dim_emb, 3),
         )
+
+    def forward(self: "Encoder", x: torch.Tensor) -> torch.Tensor:
+        # Downs
+        x = self.downs(x)
+
+        # Rearrange to (batch, length, channels)
+        x = rearrange(x, "b c l -> b l c")
+
+        return x
+
+
+class EncoderAttn(Encoder):
+    def __init__(
+        self: "EncoderAttn",
+        dim_in: int,
+        dim_h: int,
+        dim_emb: int,
+        *,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        strides: Tuple[int] = (2, 2, 2, 2),
+        res_dilations: Tuple[int] = (1, 3, 9),
+        attn_depth: int = 2,
+        attn_heads: int = 8,
+        attn_dim_head: int = 64,
+        attn_window_size: int = 512,
+        attn_dynamic_pos_bias: bool = False,
+        attn_alibi_pos_bias: bool = False,
+    ) -> None:
+        assert not (
+            attn_dynamic_pos_bias and attn_alibi_pos_bias
+        ), "Cannot have both dynamic and alibi positional bias"
+
+        super().__init__(
+            dim_in,
+            dim_h,
+            dim_emb,
+            dim_h_mult=dim_h_mult,
+            strides=strides,
+            res_dilations=res_dilations,
+        )
+
         self.attn = LocalTransformerBlock(
             dim=dim_emb,
             depth=attn_depth,
@@ -148,28 +181,20 @@ class DecoderBlock(nn.Sequential):
         )
 
 
-class DecoderAttn(nn.Module):
+class Decoder(nn.Module):
     def __init__(
-        self: "DecoderAttn",
+        self: "Decoder",
         dim_in: int,
         dim_h: int,
         dim_emb: int,
+        *,
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
         strides: Tuple[int] = (2, 2, 2, 2),
         res_dilations: Tuple[int] = (1, 3, 9),
-        attn_depth: int = 2,
-        attn_heads: int = 8,
-        attn_dim_head: int = 64,
-        attn_window_size: int = 512,
-        attn_dynamic_pos_bias: bool = False,
-        attn_alibi_pos_bias: bool = False,
         use_tanh: bool = False,
+        **kwargs: dict,
     ) -> None:
         super().__init__()
-
-        assert not (
-            attn_dynamic_pos_bias and attn_alibi_pos_bias
-        ), "Cannot have both dynamic and alibi positional bias"
 
         self.use_tanh = use_tanh
 
@@ -193,6 +218,54 @@ class DecoderAttn(nn.Module):
                     dilations=res_dilations,
                 ),
             )
+        self.ups = nn.Sequential(
+            CausalConv1d(dim_emb, dims_h[-1], 7),
+            *decoder_blocks,
+            CausalConv1d(dims_h[0], dim_in, 7),
+        )
+
+    def forward(self: "Decoder", x: torch.Tensor) -> torch.Tensor:
+        # Rearrange to (batch, channels, length)
+        x = rearrange(x, "b l c -> b c l")
+
+        # Ups
+        x = self.ups(x)
+
+        return torch.tanh(x) if self.use_tanh else x
+
+
+class DecoderAttn(Decoder):
+    def __init__(
+        self: "Decoder",
+        dim_in: int,
+        dim_h: int,
+        dim_emb: int,
+        *,
+        dim_h_mult: Tuple[int] = (1, 2, 4, 8),
+        strides: Tuple[int] = (2, 2, 2, 2),
+        res_dilations: Tuple[int] = (1, 3, 9),
+        attn_depth: int = 2,
+        attn_heads: int = 8,
+        attn_dim_head: int = 64,
+        attn_window_size: int = 512,
+        attn_dynamic_pos_bias: bool = False,
+        attn_alibi_pos_bias: bool = False,
+        use_tanh: bool = False,
+    ) -> None:
+        assert not (
+            attn_dynamic_pos_bias and attn_alibi_pos_bias
+        ), "Cannot have both dynamic and alibi positional bias"
+
+        super().__init__(
+            dim_in,
+            dim_h,
+            dim_emb,
+            dim_h_mult=dim_h_mult,
+            strides=strides,
+            res_dilations=res_dilations,
+            use_tanh=use_tanh,
+        )
+
         self.attn = LocalTransformerBlock(
             dim=dim_emb,
             depth=attn_depth,
@@ -202,13 +275,8 @@ class DecoderAttn(nn.Module):
             dynamic_pos_bias=attn_dynamic_pos_bias,
             alibi_pos_bias=attn_alibi_pos_bias,
         )
-        self.ups = nn.Sequential(
-            CausalConv1d(dim_emb, dims_h[-1], 7),
-            *decoder_blocks,
-            CausalConv1d(dims_h[0], dim_in, 7),
-        )
 
-    def forward(self: "DecoderAttn", x: torch.Tensor) -> torch.Tensor:
+    def forward(self: "Decoder", x: torch.Tensor) -> torch.Tensor:
         # Attn
         x = self.attn(x)
 
@@ -244,6 +312,7 @@ class VQVAE(nn.Module):
         vq_quantize_dropout_cutoff_index: int = 1,
         vq_stochastic_sample_codes: bool = False,
         discriminator_layers: int = 4,
+        use_attn: bool = False,
         use_tanh: bool = False,
         use_hinge_loss: bool = False,
         use_l1_loss: bool = False,
@@ -257,7 +326,10 @@ class VQVAE(nn.Module):
         self.gan_loss_weight = gan_loss_weight
         self.feature_loss_weight = feature_loss_weight
 
-        self.encoder = EncoderAttn(
+        encoder_klass = EncoderAttn if use_attn else Encoder
+        decoder_klass = DecoderAttn if use_attn else Decoder
+
+        self.encoder = encoder_klass(
             dim_in=dim_in,
             dim_h=dim_h,
             dim_emb=dim_emb,
@@ -285,7 +357,7 @@ class VQVAE(nn.Module):
             threshold_ema_dead_code=2,
             stochastic_sample_codes=vq_stochastic_sample_codes,
         )
-        self.decoder = DecoderAttn(
+        self.decoder = decoder_klass(
             dim_in=dim_in,
             dim_h=dim_h,
             dim_emb=dim_emb,
