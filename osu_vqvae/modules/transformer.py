@@ -3,7 +3,7 @@ from typing import List
 
 import torch
 from einops import rearrange
-from local_attention import DynamicPositionBias, LocalMHA
+from local_attention import LocalMHA
 from torch import nn
 from torch.nn import functional as F
 
@@ -122,19 +122,93 @@ class LearnedAlibiPositionalBias(AlibiPositionalBias):
         return bias
 
 
-class FeedForward(nn.Module):
-    def __init__(self: "FeedForward", dim: int, mult: int = 4) -> None:
+class RelativePositionBias(nn.Module):
+    def __init__(
+        self: "RelativePositionBias",
+        scale: int,
+        causal: bool = False,
+        num_buckets: int = 32,
+        max_distance: int = 128,
+        heads: int = 8,
+    ) -> None:
         super().__init__()
-        hidden_dim = int(dim * mult * 2 / 3)
-        self.layers = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, hidden_dim * 2),
-            GEGLU(),
-            nn.Linear(hidden_dim, dim),
+        self.scale = scale
+        self.causal = causal
+        self.num_buckets = num_buckets
+        self.max_distance = max_distance
+        self.relative_attention_bias = nn.Embedding(num_buckets, heads)
+
+    @staticmethod
+    def _relative_position_bucket(
+        relative_position: torch.Tensor,
+        causal: bool = True,
+        num_buckets: int = 32,
+        max_distance: int = 128,
+    ) -> torch.Tensor:
+        ret = 0
+        n = -relative_position
+        if not causal:
+            num_buckets //= 2
+            ret += (n < 0).long() * num_buckets
+            n = torch.abs(n)
+        else:
+            n = torch.max(n, torch.zeros_like(n))
+
+        max_exact = num_buckets // 2
+        is_small = n < max_exact
+
+        val_if_large = (
+            max_exact
+            + (
+                torch.log(n.float() / max_exact)
+                / math.log(max_distance / max_exact)
+                * (num_buckets - max_exact)
+            ).long()
+        )
+        val_if_large = torch.min(
+            val_if_large,
+            torch.full_like(val_if_large, num_buckets - 1),
         )
 
-    def forward(self: "FeedForward", x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
+        ret += torch.where(is_small, n, val_if_large)
+        return ret
+
+    @property
+    def device(self: "RelativePositionBias") -> torch.device:
+        return next(self.parameters()).device
+
+    def forward(self: "RelativePositionBias", i: int, j: int) -> torch.Tensor:
+        device = self.device
+        q_pos = torch.arange(j - i, j, dtype=torch.long, device=device)
+        k_pos = torch.arange(j, dtype=torch.long, device=device)
+        rel_pos = k_pos[None, :] - q_pos[:, None]
+        rp_bucket = self._relative_position_bucket(
+            rel_pos,
+            causal=self.causal,
+            num_buckets=self.num_buckets,
+            max_distance=self.max_distance,
+        )
+        values = self.relative_attention_bias(rp_bucket)
+        bias = rearrange(values, "i j h -> h i j")
+        return bias * self.scale
+
+
+class FeedForward(nn.Sequential):
+    def __init__(
+        self: "FeedForward",
+        dim: int,
+        mult: int = 4,
+        dropout: float = 0.1,
+    ) -> None:
+        hidden_dim = int(dim * mult * 2 / 3)
+        super().__init__(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, hidden_dim * 2, bias=False),
+            GEGLU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, dim, bias=False),
+        )
 
 
 class TransformerBlock(nn.Module):
@@ -144,23 +218,48 @@ class TransformerBlock(nn.Module):
         depth: int = 1,
         heads: int = 8,
         dim_head: int = 64,
+        attn_flash: bool = False,
+        attn_dropout: float = 0.0,
+        ff_dropout: float = 0.0,
+        relative_pos_bias: bool = False,
+        alibi_pos_bias: bool = False,
     ) -> None:
         super().__init__()
+        if relative_pos_bias:
+            self.rel_pos = RelativePositionBias(
+                scale=dim_head**-0.5,
+                causal=True,
+                heads=heads,
+            )
+        elif alibi_pos_bias:
+            self.rel_pos = AlibiPositionalBias(
+                heads=heads,
+            )
+        else:
+            self.rel_pos = None
+
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(
                 nn.ModuleList(
                     [
-                        Attention(dim, heads=heads, dim_head=dim_head),
-                        FeedForward(dim),
+                        Attention(
+                            dim,
+                            heads=heads,
+                            dim_head=dim_head,
+                            dropout=attn_dropout,
+                            flash=attn_flash,
+                            causal=True,
+                        ),
+                        FeedForward(dim, dropout=ff_dropout),
                     ],
                 ),
             )
 
     def forward(self: "TransformerBlock", x: torch.Tensor) -> torch.Tensor:
         for attn, ff in self.layers:
-            x = attn(shift_token(x)) + x
-            x = ff(shift_token(x)) + x
+            x = attn(x, rel_pos=self.rel_pos) + x
+            x = ff(x) + x
         return x
 
 
@@ -172,16 +271,16 @@ class LocalTransformerBlock(nn.Module):
         heads: int = 8,
         dim_head: int = 64,
         window_size: int = 512,
-        dynamic_pos_bias: bool = False,
+        ff_dropout: float = 0.0,
+        relative_pos_bias: bool = False,
         alibi_pos_bias: bool = False,
     ) -> None:
         super().__init__()
         self.ws = window_size
-        self.rel_pos = None
-
-        if dynamic_pos_bias:
-            self.rel_pos = DynamicPositionBias(
-                dim=dim // 2,
+        if relative_pos_bias:
+            self.rel_pos = RelativePositionBias(
+                scale=dim_head**-0.5,
+                causal=True,
                 heads=heads,
             )
         elif alibi_pos_bias:
@@ -207,7 +306,7 @@ class LocalTransformerBlock(nn.Module):
                             prenorm=True,
                             causal=True,
                         ),
-                        FeedForward(dim),
+                        FeedForward(dim, dropout=ff_dropout),
                     ],
                 ),
             )

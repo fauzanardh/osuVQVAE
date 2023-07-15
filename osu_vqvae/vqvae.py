@@ -5,12 +5,12 @@ import torch
 from einops import rearrange, reduce
 from torch import nn
 from torch.nn import functional as F
-from vector_quantize_pytorch import GroupedResidualVQ
+from vector_quantize_pytorch import ResidualVQ
 
 from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspose1d
 from osu_vqvae.modules.discriminator import Discriminator
 from osu_vqvae.modules.residual import ResidualBlock
-from osu_vqvae.modules.transformer import LocalTransformerBlock
+from osu_vqvae.modules.transformer import TransformerBlock
 from osu_vqvae.modules.utils import gradient_penalty, log
 
 
@@ -109,12 +109,12 @@ class EncoderAttn(Encoder):
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 512,
-        attn_dynamic_pos_bias: bool = False,
+        # attn_window_size: int = 512,
+        attn_relative_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
     ) -> None:
         assert not (
-            attn_dynamic_pos_bias and attn_alibi_pos_bias
+            attn_relative_pos_bias and attn_alibi_pos_bias
         ), "Cannot have both dynamic and alibi positional bias"
 
         super().__init__(
@@ -126,13 +126,12 @@ class EncoderAttn(Encoder):
             res_dilations=res_dilations,
         )
 
-        self.attn = LocalTransformerBlock(
+        self.attn = TransformerBlock(
             dim=dim_emb,
             depth=attn_depth,
             heads=attn_heads,
             dim_head=attn_dim_head,
-            window_size=attn_window_size,
-            dynamic_pos_bias=attn_dynamic_pos_bias,
+            relative_pos_bias=attn_relative_pos_bias,
             alibi_pos_bias=attn_alibi_pos_bias,
         )
 
@@ -247,13 +246,13 @@ class DecoderAttn(Decoder):
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 512,
-        attn_dynamic_pos_bias: bool = False,
+        # attn_window_size: int = 512,
+        attn_relative_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
         use_tanh: bool = False,
     ) -> None:
         assert not (
-            attn_dynamic_pos_bias and attn_alibi_pos_bias
+            attn_relative_pos_bias and attn_alibi_pos_bias
         ), "Cannot have both dynamic and alibi positional bias"
 
         super().__init__(
@@ -266,13 +265,12 @@ class DecoderAttn(Decoder):
             use_tanh=use_tanh,
         )
 
-        self.attn = LocalTransformerBlock(
+        self.attn = TransformerBlock(
             dim=dim_emb,
             depth=attn_depth,
             heads=attn_heads,
             dim_head=attn_dim_head,
-            window_size=attn_window_size,
-            dynamic_pos_bias=attn_dynamic_pos_bias,
+            relative_pos_bias=attn_relative_pos_bias,
             alibi_pos_bias=attn_alibi_pos_bias,
         )
 
@@ -302,11 +300,10 @@ class VQVAE(nn.Module):
         attn_depth: int = 2,
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        attn_window_size: int = 512,
-        attn_dynamic_pos_bias: bool = False,
+        # attn_window_size: int = 512,
+        attn_relative_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
         vq_num_codebooks: int = 8,
-        vq_groups: int = 1,
         vq_decay: float = 0.95,
         vq_commitment_weight: float = 0.0,
         vq_quantize_dropout_cutoff_index: int = 1,
@@ -339,15 +336,14 @@ class VQVAE(nn.Module):
             attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
-            attn_window_size=attn_window_size,
-            attn_dynamic_pos_bias=attn_dynamic_pos_bias,
+            # attn_window_size=attn_window_size,
+            attn_relative_pos_bias=attn_relative_pos_bias,
             attn_alibi_pos_bias=attn_alibi_pos_bias,
         )
-        self.vq = GroupedResidualVQ(
+        self.vq = ResidualVQ(
             dim=dim_emb,
             codebook_size=n_emb,
             num_quantizers=vq_num_codebooks,
-            groups=vq_groups,
             decay=vq_decay,
             commitment_weight=vq_commitment_weight,
             quantize_dropout_multiple_of=1,
@@ -367,8 +363,8 @@ class VQVAE(nn.Module):
             attn_depth=attn_depth,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
-            attn_window_size=attn_window_size,
-            attn_dynamic_pos_bias=attn_dynamic_pos_bias,
+            # attn_window_size=attn_window_size,
+            attn_relative_pos_bias=attn_relative_pos_bias,
             attn_alibi_pos_bias=attn_alibi_pos_bias,
             use_tanh=use_tanh,
         )
