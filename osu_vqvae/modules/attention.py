@@ -10,6 +10,18 @@ from torch.nn import functional as F
 _config = namedtuple("Config", ["enable_flash", "enable_math", "enable_mem_efficient"])
 
 
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    x = rearrange(x, "... (j d) -> ... j d", j=2)
+    x1, x2 = x.unbind(dim=-2)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(t: int, freqs: torch.Tensor, scale: float = 1) -> torch.Tensor:
+    seq_len = t.shape[-2]
+    freqs = freqs[-seq_len:, :]
+    return (t * freqs.cos() * scale) + (rotate_half(t) * freqs.sin() * scale)
+
+
 class Attend(nn.Module):
     def __init__(
         self: "Attend",
@@ -73,7 +85,7 @@ class Attend(nn.Module):
         config = self.cuda_config if is_cuda else self.cpu_config
 
         with torch.backends.cuda.sdp_kernel(**config._asdict()):
-            F.scaled_dot_product_attention(
+            out = F.scaled_dot_product_attention(
                 q,
                 k,
                 v,
@@ -81,6 +93,7 @@ class Attend(nn.Module):
                 dropout_p=self.dropout if self.training else 0.0,
                 is_causal=causal,
             )
+        return out
 
     def forward(
         self: "Attend",
@@ -173,6 +186,7 @@ class Attention(nn.Module):
         context: torch.Tensor = None,
         mask: torch.Tensor = None,
         rel_pos: nn.Module = None,
+        rotary_pos_emb: torch.Tensor = None,
         # attn_bias: torch.Tensor = None,
     ) -> torch.Tensor:
         if context is not None:
@@ -186,6 +200,29 @@ class Attention(nn.Module):
         # project to q, k, v
         q, k, v = self.to_q(x), *self.to_kv(kv_input).chunk(2, dim=-1)
 
+        # split for multi-headed attention
+        q = rearrange(q, "b n (h d) -> b h n d", h=self.heads)
+
+        # rotary positional embedding
+        if rotary_pos_emb is not None and context is None:
+            freqs, xpos_scale = rotary_pos_emb
+            seq_len = freqs.shape[-1]
+
+            q_xpos_scale, k_xpos_scale = (
+                (xpos_scale, xpos_scale**-1.0)
+                if xpos_scale is not None
+                else (1.0, 1.0)
+            )
+            (ql, qr), (kl, kr), (vl, vr) = (
+                (t[..., :seq_len], t[..., seq_len:]) for t in (q, k, v)
+            )
+
+            ql, kl, vl = (
+                apply_rotary_pos_emb(arg[0], freqs, arg[1])
+                for arg in ((ql, q_xpos_scale), (kl, k_xpos_scale), (vl, k_xpos_scale))
+            )
+            q, k, v = (torch.cat(t, dim=-1) for t in ((ql, qr), (kl, kr), (vl, vr)))
+
         # null key / values
         if self.num_null_kv > 0:
             null_k, null_v = repeat(
@@ -198,8 +235,7 @@ class Attention(nn.Module):
             k = torch.cat((null_k, k), dim=-2)
             v = torch.cat((null_v, v), dim=-2)
 
-        # split for multi-headed attention
-        q = rearrange(q, "b n (h d) -> b h n d", h=self.heads)
+        i, j = (t.shape[-2] for t in (q, k))
 
         # handle mask and null key / value
         if mask is not None:
@@ -208,7 +244,6 @@ class Attention(nn.Module):
         # prepare relative positional bias, if needed
         attn_bias = None
         if rel_pos is not None:
-            i, j = (t.shape[-2] for t in (q, k))
             attn_bias = rel_pos(i, j)
 
         # attention

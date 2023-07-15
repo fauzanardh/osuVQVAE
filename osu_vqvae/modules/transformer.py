@@ -193,6 +193,53 @@ class RelativePositionBias(nn.Module):
         return bias * self.scale
 
 
+class RotaryEmbedding(nn.Module):
+    def __init__(
+        self: "RotaryEmbedding",
+        dim: int,
+        use_xpos: bool = False,
+        scale_base: int = 512,
+        interpolation_factor: float = 1.0,
+    ) -> None:
+        super().__init__()
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+
+        assert interpolation_factor >= 1.0
+        self.interpolation_factor = interpolation_factor
+
+        if not use_xpos:
+            self.register_buffer("scale", None)
+            return
+
+        scale = (torch.arange(0, dim, 2) + 0.4 * dim) / (1.4 * dim)
+
+        self.scale_base = scale_base
+        self.register_buffer("scale", scale)
+
+    def forward(
+        self: "RotaryEmbedding",
+        seq_len: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        t = torch.arange(seq_len, device=device).type_as(self.inv_freq)
+        t = t / self.interpolation_factor
+
+        freqs = torch.einsum("i , j -> i j", t, self.inv_freq)
+        freqs = torch.cat((freqs, freqs), dim=-1)
+
+        if self.scale is None:
+            return freqs, 1.0
+
+        power = (
+            torch.arange(seq_len, device=device) - (seq_len // 2)
+        ) / self.scale_base
+        scale = self.scale ** rearrange(power, "n -> n 1")
+        scale = torch.cat((scale, scale), dim=-1)
+
+        return freqs, scale
+
+
 class FeedForward(nn.Sequential):
     def __init__(
         self: "FeedForward",
@@ -221,10 +268,27 @@ class TransformerBlock(nn.Module):
         attn_flash: bool = False,
         attn_dropout: float = 0.0,
         ff_dropout: float = 0.0,
+        rotary_pos_emb: bool = False,
+        rotary_emb_dim: int = None,
+        rotary_xpos: bool = False,
+        rotary_interpolation_factor: float = 4.0,
         relative_pos_bias: bool = False,
         alibi_pos_bias: bool = False,
     ) -> None:
         super().__init__()
+        rotary_emb_dim = max(
+            rotary_emb_dim if rotary_emb_dim is not None else (dim_head // 2),
+            32,
+        )
+        if rotary_pos_emb:
+            self.rotary_pos_emb = RotaryEmbedding(
+                rotary_emb_dim,
+                use_xpos=rotary_xpos,
+                interpolation_factor=rotary_interpolation_factor,
+            )
+        else:
+            self.rotary_pos_emb = None
+
         if relative_pos_bias:
             self.rel_pos = RelativePositionBias(
                 scale=dim_head**-0.5,
@@ -257,8 +321,11 @@ class TransformerBlock(nn.Module):
             )
 
     def forward(self: "TransformerBlock", x: torch.Tensor) -> torch.Tensor:
+        rotary_pos_emb = None
+        if self.rotary_pos_emb is not None:
+            rotary_pos_emb = self.rotary_pos_emb(x.shape[1], device=x.device)
         for attn, ff in self.layers:
-            x = attn(x, rel_pos=self.rel_pos) + x
+            x = attn(x, rel_pos=self.rel_pos, rotary_pos_emb=rotary_pos_emb) + x
             x = ff(x) + x
         return x
 
