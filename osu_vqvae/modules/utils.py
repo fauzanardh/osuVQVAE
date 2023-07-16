@@ -1,8 +1,26 @@
+from functools import wraps
 from typing import Tuple
 
 import torch
 from einops import rearrange
 from torch.nn import functional as F
+
+
+def once(fn: callable) -> callable:
+    called = False
+
+    @wraps(fn)
+    def inner(x: str) -> None:
+        nonlocal called
+        if called:
+            return
+        called = True
+        return fn(x)
+
+    return inner
+
+
+print_once = once(print)
 
 
 def log(t: torch.Tensor) -> torch.Tensor:

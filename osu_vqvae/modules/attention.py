@@ -6,6 +6,8 @@ from packaging import version
 from torch import einsum, nn
 from torch.nn import functional as F
 
+from osu_vqvae.modules.utils import print_once
+
 # constants
 _config = namedtuple("Config", ["enable_flash", "enable_math", "enable_mem_efficient"])
 
@@ -48,10 +50,12 @@ class Attend(nn.Module):
 
         device_properties = torch.cuda.get_device_properties(torch.device("cuda"))
         if device_properties.major == 8 and device_properties.minor == 0:
-            print("A100 GPU detected, using flash attention if input tensor is on cuda")
+            print_once(
+                "A100 GPU detected, using flash attention if input tensor is on cuda",
+            )
             self.cuda_config = _config(True, False, False)
         else:
-            print(
+            print_once(
                 "Non-A100 GPU detected, using math or mem efficient attention if input tensor is on cuda",
             )
             self.cuda_config = _config(False, True, True)

@@ -96,7 +96,7 @@ class Encoder(nn.Module):
         return x
 
 
-class EncoderAttn(Encoder):
+class EncoderAttn(nn.Module):
     def __init__(
         self: "EncoderAttn",
         dim_in: int,
@@ -106,52 +106,78 @@ class EncoderAttn(Encoder):
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
         strides: Tuple[int] = (2, 2, 2, 2),
         res_dilations: Tuple[int] = (1, 3, 9),
-        attn_depth: int = 2,
+        attn_depths: int = (1, 1, 1, 1),
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_flash: bool = False,
-        # attn_window_size: int = 512,
         attn_rotary_pos_emb: bool = False,
         attn_rotary_xpos: bool = False,
         attn_rotary_interpolation_factor: int = 4.0,
         attn_relative_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
     ) -> None:
+        assert (
+            len(dim_h_mult) == len(strides) == len(attn_depths)
+        ), "dim_h_mult, strides, attn_depths must have the same length"
         assert not (
             attn_relative_pos_bias and attn_alibi_pos_bias
         ), "Cannot have both dynamic and alibi positional bias"
 
-        super().__init__(
-            dim_in,
-            dim_h,
-            dim_emb,
-            dim_h_mult=dim_h_mult,
-            strides=strides,
-            res_dilations=res_dilations,
-        )
+        super().__init__()
 
-        self.attn = TransformerBlock(
-            dim=dim_emb,
-            depth=attn_depth,
-            heads=attn_heads,
-            dim_head=attn_dim_head,
-            attn_flash=attn_flash,
-            rotary_pos_emb=attn_rotary_pos_emb,
-            rotary_xpos=attn_rotary_xpos,
-            rotary_interpolation_factor=attn_rotary_interpolation_factor,
-            relative_pos_bias=attn_relative_pos_bias,
-            alibi_pos_bias=attn_alibi_pos_bias,
-        )
+        dims_h = tuple((dim_h * m for m in dim_h_mult))
+        dims_h = (dim_h, *dims_h)
+        in_out = tuple(zip(dims_h[:-1], dims_h[1:]))
+        num_layers = len(in_out)
+
+        self.pre_conv = CausalConv1d(dim_in, dim_h, 7)
+        self.post_conv = CausalConv1d(dims_h[-1], dim_emb, 3)
+
+        # Down
+        encoder_blocks = []
+        for ind in range(num_layers):
+            layer_dim_in, layer_dim_out = in_out[ind]
+            stride = strides[ind]
+            attn_depth = attn_depths[ind]
+            encoder_blocks.append(
+                nn.ModuleList(
+                    [
+                        EncoderBlock(
+                            layer_dim_in,
+                            layer_dim_out,
+                            stride,
+                            dilations=res_dilations,
+                        ),
+                        TransformerBlock(
+                            dim=layer_dim_out,
+                            depth=attn_depth,
+                            heads=attn_heads,
+                            dim_head=attn_dim_head,
+                            attn_flash=attn_flash,
+                            rotary_pos_emb=attn_rotary_pos_emb,
+                            rotary_xpos=attn_rotary_xpos,
+                            rotary_interpolation_factor=attn_rotary_interpolation_factor,
+                            relative_pos_bias=attn_relative_pos_bias,
+                            alibi_pos_bias=attn_alibi_pos_bias,
+                        ),
+                    ],
+                ),
+            )
+        self.downs = nn.ModuleList(encoder_blocks)
 
     def forward(self: "EncoderAttn", x: torch.Tensor) -> torch.Tensor:
+        x = self.pre_conv(x)
+
         # Downs
-        x = self.downs(x)
+        for encoder_block, attn_block in self.downs:
+            x = encoder_block(x)
+            # Rearrange to (batch, length, channels) for attention
+            x = rearrange(x, "b c l -> b l c")
+            x = attn_block(x)
+            # Rearrange to (batch, channels, length)
+            x = rearrange(x, "b l c -> b c l")
 
-        # Rearrange to (batch, length, channels)
-        x = rearrange(x, "b c l -> b l c")
-
-        # Attn
-        x = self.attn(x)
+        x = self.post_conv(x)
 
         return x
 
@@ -241,7 +267,7 @@ class Decoder(nn.Module):
         return torch.tanh(x) if self.use_tanh else x
 
 
-class DecoderAttn(Decoder):
+class DecoderAttn(nn.Module):
     def __init__(
         self: "Decoder",
         dim_in: int,
@@ -251,10 +277,9 @@ class DecoderAttn(Decoder):
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
         strides: Tuple[int] = (2, 2, 2, 2),
         res_dilations: Tuple[int] = (1, 3, 9),
-        attn_depth: int = 2,
+        attn_depths: int = (1, 1, 1, 1),
         attn_heads: int = 8,
         attn_dim_head: int = 64,
-        # attn_window_size: int = 512,
         attn_flash: bool = False,
         attn_rotary_pos_emb: bool = False,
         attn_rotary_xpos: bool = False,
@@ -263,42 +288,76 @@ class DecoderAttn(Decoder):
         attn_alibi_pos_bias: bool = False,
         use_tanh: bool = False,
     ) -> None:
+        assert (
+            len(dim_h_mult) == len(strides) == len(attn_depths)
+        ), "dim_h_mult, strides, attn_depths must have the same length"
         assert not (
             attn_relative_pos_bias and attn_alibi_pos_bias
         ), "Cannot have both dynamic and alibi positional bias"
 
-        super().__init__(
-            dim_in,
-            dim_h,
-            dim_emb,
-            dim_h_mult=dim_h_mult,
-            strides=strides,
-            res_dilations=res_dilations,
-            use_tanh=use_tanh,
-        )
+        super().__init__()
 
-        self.attn = TransformerBlock(
-            dim=dim_emb,
-            depth=attn_depth,
-            heads=attn_heads,
-            dim_head=attn_dim_head,
-            attn_flash=attn_flash,
-            rotary_pos_emb=attn_rotary_pos_emb,
-            rotary_xpos=attn_rotary_xpos,
-            rotary_interpolation_factor=attn_rotary_interpolation_factor,
-            relative_pos_bias=attn_relative_pos_bias,
-            alibi_pos_bias=attn_alibi_pos_bias,
-        )
+        self.use_tanh = use_tanh
+
+        dims_h = tuple((dim_h * m for m in dim_h_mult))
+        dims_h = (dim_h, *dims_h)
+        strides = tuple(reversed(strides))
+        attn_depths = tuple(reversed(attn_depths))
+        in_out = reversed(tuple(zip(dims_h[:-1], dims_h[1:])))
+        in_out = tuple(in_out)
+        num_layers = len(in_out)
+
+        self.pre_conv = CausalConv1d(dim_emb, dims_h[-1], 7)
+        self.post_conv = CausalConv1d(dims_h[0], dim_in, 7)
+
+        # Up
+        decoder_blocks = []
+        for ind in range(num_layers):
+            layer_dim_out, layer_dim_in = in_out[ind]
+            stride = strides[ind]
+            attn_depth = attn_depths[ind]
+            decoder_blocks.append(
+                nn.ModuleList(
+                    [
+                        TransformerBlock(
+                            dim=layer_dim_in,
+                            depth=attn_depth,
+                            heads=attn_heads,
+                            dim_head=attn_dim_head,
+                            attn_flash=attn_flash,
+                            rotary_pos_emb=attn_rotary_pos_emb,
+                            rotary_xpos=attn_rotary_xpos,
+                            rotary_interpolation_factor=attn_rotary_interpolation_factor,
+                            relative_pos_bias=attn_relative_pos_bias,
+                            alibi_pos_bias=attn_alibi_pos_bias,
+                        ),
+                        DecoderBlock(
+                            layer_dim_in,
+                            layer_dim_out,
+                            stride,
+                            dilations=res_dilations,
+                        ),
+                    ],
+                ),
+            )
+
+        self.decoder_blocks = nn.ModuleList(decoder_blocks)
 
     def forward(self: "Decoder", x: torch.Tensor) -> torch.Tensor:
-        # Attn
-        x = self.attn(x)
-
         # Rearrange to (batch, channels, length)
         x = rearrange(x, "b l c -> b c l")
+        x = self.pre_conv(x)
 
         # Ups
-        x = self.ups(x)
+        for attn_block, decoder_block in self.decoder_blocks:
+            # Rearrange to (batch, length, channels) for attention
+            x = rearrange(x, "b c l -> b l c")
+            x = attn_block(x)
+            # Rearrange to (batch, channels, length)
+            x = rearrange(x, "b l c -> b c l")
+            x = decoder_block(x)
+
+        x = self.post_conv(x)
 
         return torch.tanh(x) if self.use_tanh else x
 
@@ -313,11 +372,10 @@ class VQVAE(nn.Module):
         dim_h_mult: Tuple[int] = (1, 2, 4, 8),
         strides: Tuple[int] = (2, 2, 2, 2),
         res_dilations: Tuple[int] = (1, 3, 9),
-        attn_depth: int = 2,
+        attn_depths: int = (1, 1, 1, 1),
         attn_heads: int = 8,
         attn_dim_head: int = 64,
         attn_flash: bool = False,
-        # attn_window_size: int = 512,
         attn_rotary_pos_emb: bool = False,
         attn_rotary_xpos: bool = False,
         attn_rotary_interpolation_factor: int = 4.0,
@@ -353,7 +411,7 @@ class VQVAE(nn.Module):
             dim_h_mult=dim_h_mult,
             strides=strides,
             res_dilations=res_dilations,
-            attn_depth=attn_depth,
+            attn_depths=attn_depths,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_flash=attn_flash,
@@ -384,7 +442,7 @@ class VQVAE(nn.Module):
             dim_h_mult=dim_h_mult,
             strides=strides,
             res_dilations=res_dilations,
-            attn_depth=attn_depth,
+            attn_depths=attn_depths,
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_flash=attn_flash,
@@ -410,6 +468,8 @@ class VQVAE(nn.Module):
 
     def encode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
+        # Rearrange to (batch, length, channels)
+        x = rearrange(x, "b c l -> b l c")
         return self.vq(x)
 
     def decode(self: "VQVAE", x: torch.Tensor) -> torch.Tensor:
@@ -417,7 +477,7 @@ class VQVAE(nn.Module):
 
     def decode_from_ids(self: "VQVAE", quantized_ids: torch.Tensor) -> torch.Tensor:
         codes = self.vq.get_codes_from_indices(quantized_ids)
-        x = reduce(codes, "g q b l c -> b l (g c)", "sum")
+        x = reduce(codes, "q b l c -> b l c", "sum")
         return self.decode(x)
 
     def forward(
