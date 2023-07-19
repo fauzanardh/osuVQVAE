@@ -67,7 +67,12 @@ class Attend(nn.Module):
         v: torch.Tensor,
         mask: torch.Tensor = None,
     ) -> torch.Tensor:
-        _, heads, q_len, _, k_len, is_cuda = *q.shape, k.shape[-2], q.is_cuda
+        _, heads, q_len, _, k_len, is_cuda, dtype = (
+            *q.shape,
+            k.shape[-2],
+            q.is_cuda,
+            q.dtype,
+        )
 
         k = rearrange(k, "b ... -> b 1 ...").expand_as(q)
         v = rearrange(v, "b ... -> b 1 ...").expand_as(q)
@@ -89,6 +94,10 @@ class Attend(nn.Module):
         config = self.cuda_config if is_cuda else self.cpu_config
 
         with torch.backends.cuda.sdp_kernel(**config._asdict()):
+            if config.enable_flash:
+                # convert to half precision
+                q, k, v = (t.half() for t in (q, k, v))
+
             out = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -97,7 +106,7 @@ class Attend(nn.Module):
                 dropout_p=self.dropout if self.training else 0.0,
                 is_causal=causal,
             )
-        return out
+        return out.to(dtype) if config.enable_flash else out
 
     def forward(
         self: "Attend",
