@@ -5,7 +5,7 @@ import torch
 from einops import rearrange, reduce
 from torch import nn
 from torch.nn import functional as F
-from vector_quantize_pytorch import ResidualVQ
+from vector_quantize_pytorch import VectorQuantize
 
 from osu_vqvae.modules.causal_convolution import CausalConv1d, CausalConvTranspose1d
 from osu_vqvae.modules.discriminator import Discriminator
@@ -381,10 +381,8 @@ class VQVAE(nn.Module):
         attn_rotary_interpolation_factor: int = 4.0,
         attn_relative_pos_bias: bool = False,
         attn_alibi_pos_bias: bool = False,
-        vq_num_codebooks: int = 8,
         vq_decay: float = 0.95,
         vq_commitment_weight: float = 0.0,
-        vq_quantize_dropout_cutoff_index: int = 1,
         vq_stochastic_sample_codes: bool = False,
         discriminator_layers: int = 4,
         use_attn: bool = False,
@@ -415,22 +413,17 @@ class VQVAE(nn.Module):
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_flash=attn_flash,
-            # attn_window_size=attn_window_size,
             attn_rotary_pos_emb=attn_rotary_pos_emb,
             attn_rotary_xpos=attn_rotary_xpos,
             attn_rotary_interpolation_factor=attn_rotary_interpolation_factor,
             attn_relative_pos_bias=attn_relative_pos_bias,
             attn_alibi_pos_bias=attn_alibi_pos_bias,
         )
-        self.vq = ResidualVQ(
+        self.vq = VectorQuantize(
             dim=dim_emb,
             codebook_size=n_emb,
-            num_quantizers=vq_num_codebooks,
             decay=vq_decay,
             commitment_weight=vq_commitment_weight,
-            quantize_dropout_multiple_of=1,
-            quantize_dropout=True,
-            quantize_dropout_cutoff_index=vq_quantize_dropout_cutoff_index,
             kmeans_init=True,
             threshold_ema_dead_code=2,
             stochastic_sample_codes=vq_stochastic_sample_codes,
@@ -446,7 +439,6 @@ class VQVAE(nn.Module):
             attn_heads=attn_heads,
             attn_dim_head=attn_dim_head,
             attn_flash=attn_flash,
-            # attn_window_size=attn_window_size,
             attn_rotary_pos_emb=attn_rotary_pos_emb,
             attn_rotary_xpos=attn_rotary_xpos,
             attn_rotary_interpolation_factor=attn_rotary_interpolation_factor,
